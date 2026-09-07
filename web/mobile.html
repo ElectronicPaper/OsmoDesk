@@ -1,0 +1,932 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Osmo Pocket 4 Pro — Phone</title>
+<style>
+/* ==========================================================================
+   Phone controller. One thumb, field instrument grammar: black, 2px white
+   hairlines, square corners, 44px+ targets, no gradients. Colour meanings are
+   shared with the engineering panel and the Core2 box -- an operator who
+   learns them on one surface must not have to relearn them on another.
+
+     red    = camera-confirmed recording only (the camera never reports its
+              tally over any command implemented here, so this is dark)
+     amber  = uncertain, armed, constrained, near a travel stop
+     green  = a cue released / repeatable take
+     cyan   = the input owning the head right now
+     magenta = control fault -- never confused with the tally
+
+   No live video: the camera does not stream a decodable picture over any
+   transport this project has proven, so the frame is a placeholder, honestly
+   labelled, exactly like the "R&D" tags on the Core2 box.
+   ========================================================================== */
+:root{
+  --ink:#f2f4f5; --dim:#9aa3ab; --faint:#5d6975;
+  --live:#3dd6f5; --rec:#ff453a; --warn:#ffb020; --ok:#4ce05b; --fault:#e04cff;
+  --panel:#1a1f24; --edge:#2a323b; --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;}
+html,body{height:100%;margin:0;background:#000;overscroll-behavior:none;}
+body{
+  font:14px/1.4 -apple-system,"Segoe UI",ui-sans-serif,system-ui,sans-serif;
+  font-weight:500; color:var(--ink); user-select:none; -webkit-user-select:none;
+  touch-action:manipulation; display:flex; justify-content:center;
+}
+button,[role=button]{font:inherit;}
+#app{width:100%; max-width:480px; height:100vh; height:100dvh; position:relative;
+     overflow:hidden; display:flex; flex-direction:column;
+     padding-top:env(safe-area-inset-top);}
+
+/* -------------------------------------------------------------- header --- */
+#hdr{flex:none; display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+     padding:10px 16px 4px; min-height:56px;}
+#hdr .rec{display:flex; align-items:center; gap:6px; font-size:10px; letter-spacing:.14em;}
+#hdr .rec i{width:8px; height:8px; border-radius:50%; background:var(--dim); flex:none;}
+#hdr .rec.on i{background:var(--warn); animation:beat 1.2s infinite;}
+#hdr .rec.on.confirmed i{background:var(--rec);}
+#hdr .rec .t{font:500 24px/1 var(--mono); margin-top:2px; color:var(--dim);}
+#hdr .rec.on .t{color:var(--warn);}
+#hdr .rec.on.confirmed .t{color:var(--rec);}
+@keyframes beat{50%{opacity:.35;}}
+#hdr .fault{background:var(--fault); color:#000; padding:6px 10px; grid-column:1;}
+#hdr .fault b{display:block; font-size:10px; letter-spacing:.14em;}
+#hdr .fault span{font:500 13px/1.2 var(--mono);}
+#dots{display:flex; gap:6px; align-items:center; justify-content:center; padding:12px 8px;}
+#dots i{width:6px; height:4px; background:var(--edge); cursor:pointer; transition:width .15s;}
+#dots i.on{width:18px; background:#fff;}
+#hdr .cam{text-align:right; font:500 12px/1.5 var(--mono); color:var(--dim);}
+#hdr .cam b{font-weight:500;}
+
+/* --------------------------------------------------------------- strip --- */
+#viewport{flex:1; overflow:hidden; position:relative;}
+#track{display:flex; width:300%; height:100%; will-change:transform;}
+.ws{width:33.333%; height:100%; overflow-y:auto; overflow-x:hidden;
+    padding:6px 16px 16px; display:flex; flex-direction:column; gap:10px;
+    -webkit-overflow-scrolling:touch;}
+.ws::-webkit-scrollbar{display:none;}
+
+/* --------------------------------------------------------------- shoot --- */
+#pic{position:relative; height:250px; flex:none; background:
+     repeating-linear-gradient(135deg,#0d1114 0 6px,#111619 6px 12px);
+     overflow:hidden; box-sizing:border-box; border:3px solid var(--panel);
+     touch-action:none;}
+#pic.rec{border-color:var(--warn); border-style:dashed;}
+#pic.rec.confirmed{border-color:var(--rec); border-style:solid;}
+#pic .label{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+            font:11px var(--mono); color:var(--faint); letter-spacing:.08em; text-align:center;}
+#pic .nolink{position:absolute; inset:0; display:grid; place-items:center;
+             text-align:center; padding:24px;}
+#pic .nolink .t1{font:500 13px var(--mono); color:var(--dim); letter-spacing:.1em; line-height:1.7;}
+#pic .nolink .t2{font-size:12px; color:var(--faint); margin:6px 0 16px; line-height:1.5;}
+#pic .nolink a{display:inline-grid; place-items:center; height:44px; padding:0 20px;
+               border:2px solid #fff; font-size:11px; letter-spacing:.14em; color:#fff;
+               text-decoration:none; cursor:pointer;}
+#env{position:absolute; left:26px; right:26px; top:22px; bottom:22px;
+     border:1px solid rgba(255,255,255,.22);}
+.wedge{position:absolute; background:repeating-linear-gradient(45deg,rgba(255,176,32,.4) 0 4px,transparent 4px 8px);}
+#wedgeTop{left:0; right:0; top:0;} #wedgeBot{left:0; right:0; bottom:0;}
+#wedgeL{top:0; bottom:0; left:0;} #wedgeR{top:0; bottom:0; right:0;}
+.ghost{position:absolute; width:26px; height:26px; margin:-13px; border:2px dashed rgba(255,255,255,.5);
+       display:grid; place-items:center; font:700 9px var(--mono); color:var(--dim); transform:translate(0,0);}
+.ghost.cue{border-color:var(--ok); color:var(--ok);}
+#reticle{position:absolute; width:40px; height:40px; margin:-20px; border:3px solid var(--live);
+         display:grid; place-items:center;}
+#reticle i{width:6px; height:6px; background:var(--live);}
+#toolsAndCap{position:absolute; left:12px; right:12px; bottom:10px; display:flex; gap:6px; align-items:center;}
+#zoomTxt{position:absolute; right:12px; bottom:34px; font:500 11px var(--mono); color:var(--dim);}
+#countdown{position:absolute; inset:0; background:rgba(0,0,0,.72); display:none; place-items:center; text-align:center;}
+#countdown.on{display:grid;}
+#countdown .n{font:500 88px/1 var(--mono); color:#fff;}
+#countdown .k{font-size:11px; letter-spacing:.2em; color:var(--warn);}
+
+.chiprow{display:flex; gap:6px; flex:none;}
+.chip{flex:1; height:44px; border:2px solid #fff; display:grid; place-items:center;
+     font-size:11px; letter-spacing:.06em; cursor:pointer; white-space:nowrap; color:#fff;}
+.chip.on{background:var(--live); color:#000; font-weight:700; border-color:var(--live);}
+.chip.warn{background:var(--warn); color:#000; font-weight:700; border-color:var(--warn);}
+.chip.dim{opacity:.4;}
+
+#readouts{display:grid; grid-template-columns:1fr 1fr; gap:8px; flex:none;}
+.ro{background:var(--panel); padding:8px 10px;}
+.ro .k{font-size:9px; letter-spacing:.14em; color:var(--dim);}
+.ro .v{font:500 20px var(--mono);}
+
+#moveBox{background:var(--panel); padding:10px; display:flex; flex-direction:column;
+        gap:6px; flex:none; min-height:104px;}
+#moveBox .hd{display:flex; justify-content:space-between; font-size:9px; letter-spacing:.14em; color:var(--dim);}
+#moveBox .hd b{font-family:var(--mono); color:#fff; font-weight:500;}
+#moveState{font:500 11px/1.4 var(--mono); color:var(--dim);}
+#moveState.busy{color:var(--warn);} #moveState.fault{color:var(--fault);}
+.actrow{display:flex; gap:6px; margin-top:auto;}
+.act{flex:1; height:44px; display:grid; place-items:center; font-size:11px;
+    letter-spacing:.1em; cursor:pointer; border:2px solid #fff; color:#fff;}
+.act.arm{position:relative; overflow:hidden;}
+.act.arm i{position:absolute; inset:0; background:var(--warn); width:0%; z-index:0;}
+.act.arm span{position:relative; z-index:1; mix-blend-mode:difference;}
+.act.roll{background:var(--warn); color:#000; border:none; font-weight:700;}
+.act.go{background:var(--ok); color:#000; border:none; font-weight:700; letter-spacing:.2em;
+       animation:cue 1s infinite;}
+@keyframes cue{50%{filter:brightness(1.35);}}
+.act.dim{opacity:.4; cursor:default;}
+
+#stickCol{display:flex; flex-direction:column; align-items:center; gap:8px; flex:none;}
+#pad{position:relative; width:176px; height:176px; border-radius:50%; background:var(--panel);
+    border:3px solid var(--faint); box-sizing:border-box; touch-action:none;}
+#pad.ready{border-color:#fff;}
+#pad svg{position:absolute; inset:0; width:100%; height:100%; pointer-events:none;}
+#pad .knob{position:absolute; width:64px; height:64px; margin:-32px; border-radius:50%;
+          background:var(--faint); border:3px solid #000; left:50%; top:50%; transition:left .15s,top .15s;}
+#pad.ready .knob{background:var(--live);}
+#capture{width:176px; height:44px; border:2px solid #fff; display:grid; place-items:center;
+        font-size:11px; letter-spacing:.1em; cursor:pointer; color:#fff;}
+#capture.dim{opacity:.4;}
+
+.shootRow{display:flex; gap:6px; flex:none;}
+
+/* --------------------------------------------------------------- moves --- */
+#moveHead{display:flex; justify-content:space-between; align-items:baseline; flex:none;}
+#moveHead .n{font-size:16px; font-weight:700;} #moveHead .c{font:500 13px var(--mono); color:var(--dim);}
+#timeline{position:relative; height:40px; background:var(--panel); border:2px solid #fff; overflow:hidden; flex:none;}
+#playhead{position:absolute; top:0; bottom:0; left:0; width:0; background:rgba(61,214,245,.2); border-right:2px solid var(--live);}
+.mk{position:absolute; top:0; bottom:0; width:2px; background:var(--faint);}
+.mk.cue{background:var(--ok);}
+.mk b{position:absolute; top:3px; left:4px; font:700 10px var(--mono); color:var(--dim);}
+#wpEmpty{padding:18px 12px; border:2px dashed var(--edge); text-align:center; font-size:12px;
+        color:var(--dim); line-height:1.6; flex:none;}
+#wpList{display:flex; flex-direction:column; gap:6px; flex:none;}
+.wprow{display:grid; grid-template-columns:32px 1fr auto; gap:10px; align-items:center;
+      padding:8px; background:var(--panel); border:2px solid var(--panel); cursor:pointer;}
+.wprow.cur{border-color:var(--ok);}
+.wprow .lbl{width:32px; height:32px; display:grid; place-items:center; background:#fff; color:#000;
+           font:700 13px var(--mono);}
+.wprow .pos{font:500 12px var(--mono);} .wprow .tm{font-size:11px; color:var(--dim); margin-top:2px;}
+.wprow .cuetag{font:700 9px var(--mono); padding:3px 6px; color:var(--faint); border:1px solid var(--edge);}
+.wprow .cuetag.on{background:var(--ok); color:#000; border-color:var(--ok);}
+.hr{border-top:2px solid var(--edge); padding-top:10px; display:flex; flex-direction:column;
+   gap:8px; flex:none;}
+.hrhead{display:flex; justify-content:space-between; align-items:center;
+       font-size:10px; letter-spacing:.14em; color:var(--dim);}
+#startChk{font:500 10px var(--mono); padding:4px 8px; border:1px solid var(--edge);}
+#startChk.at{color:var(--ok); border-color:#20492a;} #startChk.off{color:var(--warn); border-color:#6b4d09;}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+.btnline{height:44px; border:2px solid #fff; display:grid; place-items:center; font-size:11px;
+        letter-spacing:.1em; cursor:pointer; color:#fff;}
+.btnline.dim{opacity:.4;}
+.retimerow{display:flex; gap:6px; align-items:center;}
+.retimerow .lab{font-size:10px; letter-spacing:.14em; color:var(--dim); width:56px; flex:none;}
+.retimebtn{flex:1; height:40px; border:2px solid #fff; display:grid; place-items:center;
+          font:500 12px var(--mono); cursor:pointer; color:#fff;}
+#compareBtn{height:36px; padding:0 12px; display:grid; place-items:center; border:2px solid #fff;
+           font-size:10px; letter-spacing:.1em; cursor:pointer; color:#fff;}
+#compareBtn.dim{opacity:.4;}
+#takeRow{display:flex; gap:10px; align-items:center; padding:8px; background:var(--panel);
+        border:2px solid var(--panel); cursor:pointer;}
+#takeRow.circled{border-color:var(--ok);}
+#takeRow .id{font:700 12px var(--mono); color:var(--live);}
+#takeRow .n{flex:1; font-size:11px; color:var(--dim);}
+#takeRow .v{font:700 10px var(--mono); padding:3px 6px;}
+#takeRow .v.clean{background:#0d2a14; color:#6ee787;} #takeRow .v.bad{background:#241c07; color:var(--warn);}
+#pastTakes .tk{display:flex; gap:10px; align-items:center; padding:6px 8px; font-size:11px; color:var(--faint);}
+#compareOut{font:500 11px/1.5 var(--mono); padding:8px 10px;}
+#compareOut.matched{color:var(--ok); background:#0d1a10;}
+#compareOut.stab{color:var(--warn); background:#241c07;}
+#compareOut.no{color:#ff6b6b; background:#1e0f0f;}
+#logTake{height:40px; border:2px solid #fff; color:#fff; display:grid; place-items:center;
+        font-size:11px; letter-spacing:.1em; cursor:pointer;}
+.lapse3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;}
+.lapse3 .cell{background:var(--panel); padding:8px 10px; cursor:pointer;}
+.lapse3 .cell .k{font-size:9px; letter-spacing:.14em; color:var(--dim);} .lapse3 .cell .v{font:500 18px var(--mono);}
+#lapseSum{font:500 12px/1.5 var(--mono); color:var(--dim); padding:8px 10px; background:var(--panel);}
+#lapseSum.ready{color:#fff;}
+#lapseResume{padding:10px; background:var(--warn); color:#000; font-size:12px; line-height:1.5; display:none;}
+#lapseResume.on{display:block;}
+#lapseResume button{margin-top:6px; height:36px; padding:0 14px; border:0; background:#000; color:#fff;
+                    font-size:11px; letter-spacing:.1em; cursor:pointer;}
+.act.lapse{height:44px;}
+.act.lapse.running{background:var(--rec); color:#fff; border:none;}
+
+/* -------------------------------------------------------------- system --- */
+.syslabel{font-size:10px; letter-spacing:.14em; color:var(--dim);}
+#connBtn{height:52px; background:var(--live); color:#000; display:grid; place-items:center;
+        font-size:12px; letter-spacing:.14em; font-weight:700; cursor:pointer; flex:none;}
+#connBtn.disc{background:transparent; border:2px solid var(--edge); color:var(--dim);}
+#stages{display:flex; flex-direction:column; gap:2px; border:2px solid #fff; flex:none;}
+#stages.hidden{display:none;}
+.stage{display:flex; gap:10px; align-items:center; padding:9px 12px; color:var(--faint);}
+.stage.cur{background:var(--warn); color:#000; font-weight:700;}
+.stage.fail{background:var(--fault); color:#000; font-weight:700;}
+.stage.done{color:#fff;}
+.stage .mk{width:16px; font-family:var(--mono);}
+.stage .n{flex:1; letter-spacing:.1em; font-size:11px;}
+.stage .d{font:500 11px var(--mono); color:var(--dim);}
+.explain{font-size:12px; color:var(--dim); line-height:1.5;}
+.kv{display:flex; justify-content:space-between; font:500 13px var(--mono);}
+.kv .k{color:var(--dim);}
+#segFeel,#segLock,#segThumb{display:grid; border:2px solid #fff;}
+#segFeel{grid-template-columns:1fr 1fr 1fr;} #segLock{grid-template-columns:1fr 1fr 1fr;}
+#segThumb{grid-template-columns:1fr 1fr;}
+.seg{height:40px; display:grid; place-items:center; font-size:10px; letter-spacing:.1em; cursor:pointer; color:#fff;}
+.seg + .seg{border-left:2px solid #fff;}
+.seg.on{background:#fff; color:#000; font-weight:700;}
+
+/* -------------------------------------------------------------- bottom --- */
+#bottom{flex:none; display:flex; gap:12px; padding:12px 16px calc(16px + env(safe-area-inset-bottom));}
+#stop{flex:1; border:3px solid #fff; display:grid; place-items:center; font-size:18px;
+     letter-spacing:.16em; font-weight:700; cursor:pointer; background:#000; color:#fff;}
+#stop.armed{background:var(--warn); color:#000;}
+#stop.fault{border-color:var(--fault);}
+#recBtn{width:64px; height:64px; border-radius:50%; border:3px solid #fff; display:grid;
+       place-items:center; cursor:pointer; flex:none;}
+#recBtn i{width:44px; height:44px; border-radius:50%; background:var(--faint); transition:all .15s;}
+#recBtn.ready i{background:var(--rec);}
+#recBtn.on i{width:44px; height:28px; border-radius:4px;}
+
+/* --------------------------------------------------------------- sheet --- */
+#overlay{position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; z-index:10;}
+#overlay.on{display:block;}
+#sheet{position:fixed; left:0; right:0; bottom:0; max-width:480px; margin:0 auto;
+      background:#0c0f12; border-top:3px solid #fff; padding:16px 16px calc(32px + env(safe-area-inset-bottom));
+      display:none; flex-direction:column; gap:10px; z-index:11;}
+#sheet.on{display:flex;}
+#sheet .hd{display:flex; justify-content:space-between; align-items:center;}
+#sheet .hd b{font-size:11px; letter-spacing:.16em;}
+#sheet .hd .done{height:44px; padding:0 14px; display:grid; place-items:center; border:2px solid #fff;
+                 font-size:11px; letter-spacing:.1em; cursor:pointer; color:#fff;}
+.sheetnote{font-size:11px; color:var(--dim); line-height:1.5;}
+#toast{position:fixed; left:16px; right:16px; bottom:100px; max-width:448px; margin:0 auto;
+      padding:10px 14px; background:#fff; color:#000; font-size:12px; font-weight:700;
+      letter-spacing:.04em; text-align:center; z-index:12; display:none;}
+#toast.on{display:block;}
+.hidden{display:none!important;}
+a.link{color:var(--live);}
+</style>
+
+<div id="app">
+  <header id="hdr">
+    <div class="rec" id="recBox"><i></i><span id="recWord">STBY</span><div class="t" id="recTime">00:00:00</div></div>
+    <div id="dots"><i data-go="0"></i><i data-go="1"></i><i data-go="2"></i></div>
+    <div class="cam"><div>CAM <b id="camBatt">--</b></div><div>LINK <span id="linkState">OFFLINE</span></div></div>
+  </header>
+
+  <div id="viewport">
+    <div id="track">
+
+      <!-- ============================================================ SHOOT === -->
+      <section class="ws" data-name="shoot" id="wsShoot">
+        <div id="pic">
+          <div class="label">live view — not implemented on this transport</div>
+          <div id="env">
+            <div class="wedge" id="wedgeTop"></div><div class="wedge" id="wedgeBot"></div>
+            <div class="wedge" id="wedgeL"></div><div class="wedge" id="wedgeR"></div>
+            <div id="ghosts"></div>
+            <div id="reticle"><i></i></div>
+          </div>
+          <div id="toolsAndCap">
+            <div class="chip" id="chipIso">ISO --</div>
+            <div class="chip" id="chipShutter">1/--</div>
+            <div class="chip" id="chipWb">--K</div>
+          </div>
+          <div id="zoomTxt"></div>
+          <div id="countdown"><div><div class="k">ROLLING · PRE-ROLL</div><div class="n" id="countN">3</div>
+            <div style="font-size:11px;color:var(--dim)">STOP cancels</div></div></div>
+          <div class="nolink hidden" id="noLink">
+            <div><div class="t1" id="noLinkTitle">NO CAMERA</div>
+            <div class="t2" id="noLinkBody">Pair once in SYSTEM. Approve on the camera screen if asked.</div>
+            <a id="noLinkGo">SYSTEM →</a></div>
+          </div>
+        </div>
+
+        <div id="readouts">
+          <div class="ro"><div class="k">PAN</div><div class="v" id="panTxt">--</div></div>
+          <div class="ro"><div class="k">TILT</div><div class="v" id="tiltTxt">--</div></div>
+        </div>
+        <div class="shootRow">
+          <div class="chip on" id="feelChip">FLUID</div>
+          <div class="chip" id="lockChip">LOCK</div>
+        </div>
+
+        <div id="moveBox">
+          <div class="hd"><span>MOVE</span><b id="moveSummary">—</b></div>
+          <div id="moveState">NO CAMERA</div>
+          <div class="actrow" id="moveActRow">
+            <div class="act arm" id="armBtn"><i></i><span>HOLD TO ARM</span></div>
+          </div>
+        </div>
+
+        <div id="stickCol">
+          <div id="pad">
+            <svg viewBox="0 0 100 100">
+              <path d="M 28 11.9 A 44 44 0 0 1 72 11.9" fill="none" stroke="#ffb020" stroke-width="5" id="gaugeUp"></path>
+              <path d="M 88.1 28 A 44 44 0 0 1 88.1 72" fill="none" stroke="#ffb020" stroke-width="5" id="gaugeR"></path>
+              <path d="M 72 88.1 A 44 44 0 0 1 28 88.1" fill="none" stroke="#ffb020" stroke-width="5" id="gaugeDown"></path>
+              <path d="M 11.9 72 A 44 44 0 0 1 11.9 28" fill="none" stroke="#ffb020" stroke-width="5" id="gaugeL"></path>
+            </svg>
+            <div class="knob" id="knob"></div>
+          </div>
+          <div id="capture">CAPTURE P1</div>
+        </div>
+      </section>
+
+      <!-- ============================================================ MOVES === -->
+      <section class="ws" data-name="moves" id="wsMoves">
+        <div id="moveHead"><div class="n" id="moveName">untitled</div><div class="c" id="moveCount">0 pts · 0.0s</div></div>
+        <div id="timeline"><div id="playhead"></div><div id="markers"></div></div>
+        <div id="wpEmpty">Frame a shot with the stick on SHOOT, then <b style="color:#fff">CAPTURE</b>.<br>Two or more points make a move.</div>
+        <div id="wpList"></div>
+        <div class="grid2 hidden" id="movesActRow2">
+          <div class="act arm" id="armBtn2"><i></i><span>HOLD TO ARM</span></div>
+          <div class="btnline" id="clearBtn">CLEAR</div>
+        </div>
+        <div style="font-size:11px;letter-spacing:.14em;color:var(--warn)" id="moveState2"></div>
+
+        <div class="hr hidden" id="betweenTakes">
+          <div class="hrhead"><span>BETWEEN TAKES</span><span id="startChk">—</span></div>
+          <div class="grid2">
+            <div class="btnline" id="backToOne">BACK TO ONE</div>
+            <div class="btnline" id="reReference">RE-REFERENCE</div>
+          </div>
+          <div class="retimerow"><span class="lab">RETIME</span>
+            <div class="retimebtn" data-retime=".5">½×</div>
+            <div class="retimebtn" data-retime=".75">0.75×</div>
+            <div class="retimebtn" data-retime="1.5">1.5×</div>
+            <div class="retimebtn" data-retime="2">2×</div>
+          </div>
+        </div>
+
+        <div class="hr">
+          <div class="hrhead"><span>TAKES · <span id="slate">—</span></span>
+            <div id="compareBtn">MATCH LAST TWO</div></div>
+          <div id="takeRow" class="hidden"></div>
+          <div id="pastTakes"></div>
+          <div id="compareOut" class="hidden"></div>
+          <div id="logTake">LOG TAKE</div>
+        </div>
+
+        <div class="hr">
+          <div class="hrhead"><span>MOTION TIMELAPSE</span><span style="font:500 11px var(--mono);color:var(--dim)" id="lapseMode">shoot-move-shoot</span></div>
+          <div id="lapseResume"><b>An interrupted timelapse can resume.</b><div id="lapseResumeText"></div><button id="lapseResumeBtn">RESUME</button></div>
+          <div class="lapse3">
+            <div class="cell" id="lapseClipCell"><div class="k">CLIP</div><div class="v" id="lapseClip">8s</div></div>
+            <div class="cell" id="lapseFpsCell"><div class="k">AT</div><div class="v" id="lapseFps">25</div></div>
+            <div class="cell" id="lapseExpCell"><div class="k">EXPOSE</div><div class="v" id="lapseExp">0.5s</div></div>
+          </div>
+          <div id="lapseSum">Cost it before you commit an afternoon.</div>
+          <div class="grid2">
+            <div class="btnline" id="lapseCost">COST IT</div>
+            <div class="act lapse dim" id="lapseToggle">START</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================================================== SYSTEM === -->
+      <section class="ws" data-name="system" id="wsSystem">
+        <div class="hrhead" style="margin-top:4px"><span>CAMERA</span><span id="connState"></span></div>
+        <div id="connBtn">CONNECT</div>
+        <div id="stages" class="hidden"></div>
+        <div class="explain hidden" id="approveNote" style="padding:10px 12px;background:var(--warn);color:#000"></div>
+
+        <div class="hr">
+          <span class="syslabel">FEEL</span>
+          <div id="segFeel"><div class="seg" data-feel="news">CRISP</div><div class="seg" data-feel="fluid">FLUID</div><div class="seg" data-feel="glide">GLIDE</div></div>
+          <span class="syslabel">AXIS LOCK</span>
+          <div id="segLock"><div class="seg" data-lock="free">FREE</div><div class="seg" data-lock="pan">PAN ONLY</div><div class="seg" data-lock="tilt">TILT ONLY</div></div>
+        </div>
+
+        <div class="hr">
+          <span class="syslabel">HAND</span>
+          <div id="segThumb"><div class="seg" data-thumb="left">LEFT THUMB</div><div class="seg" data-thumb="right">RIGHT THUMB</div></div>
+        </div>
+
+        <div class="hr">
+          <span class="syslabel">RECORD TALLY</span>
+          <div class="explain">The camera does not report its tally to this app over any command implemented here. REC stays amber and dashed for every take; red is reserved for camera-confirmed proof, which does not exist yet.</div>
+        </div>
+
+        <div class="hr">
+          <span class="syslabel">CONTROL OWNER</span>
+          <div class="kv"><span class="k">CURRENTLY</span><span id="ownerTxt">none</span></div>
+        </div>
+
+        <div class="hr">
+          <span class="syslabel">THIS PHONE</span>
+          <div class="kv"><span class="k">BATTERY</span><span id="phoneBatt">not reported</span></div>
+          <div class="explain">ARM is refused below 10% when the browser reports a battery level. A move that dies mid-take is worse than one that never starts. Safari on iOS does not report battery level; this stays "not reported" there and the floor cannot apply.</div>
+        </div>
+
+        <div class="hr"><a class="link" href="/panel" style="font-size:12px">&larr; engineering panel</a></div>
+      </section>
+
+    </div>
+  </div>
+
+  <footer id="bottom">
+    <div id="stop">STOP</div>
+    <div id="recBtn"><i></i></div>
+  </footer>
+</div>
+
+<div id="overlay"></div>
+<div id="sheet">
+  <div class="hd"><b id="sheetTitle"></b><span class="done" id="sheetDone">DONE</span></div>
+  <div id="sheetBody"></div>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const app = $("app");
+
+/* ---------------------------------------------------------------- fetch --- */
+async function post(path, body) {
+  try {
+    const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
+                                 body: JSON.stringify(body || {})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) toast(j.error || `${path} failed`);
+    return j;
+  } catch (e) { toast("not connected"); return {ok:false, error:String(e)}; }
+}
+let toastTimer = null;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("on"), 2200);
+}
+
+/* ------------------------------------------------------------ ui state --- */
+const RAMP_LABEL = {news:"CRISP", fluid:"FLUID", glide:"GLIDE", direct:"CRISP", float:"GLIDE"};
+const RAMP_CYCLE = ["news", "fluid", "glide"];
+const ui = {
+  ws: 0, dragStartX: null, dragDX: 0,
+  thumb: localStorage.getItem("osmo_thumb") || "right",
+  sheet: null, wpEdit: -1,
+  lapse: {clip: 8, fps: 25, exp: 0.5, planned: false},
+  phoneBatt: null, armHoldT: null, armHoldStart: 0,
+  padHeld: false, padTilt: 0, padPan: 0, padDirty: false,
+  recStartedAt: null,
+};
+
+if (navigator.getBattery) {
+  navigator.getBattery().then(b => {
+    const upd = () => { ui.phoneBatt = Math.round(b.level * 100); };
+    upd(); b.addEventListener("levelchange", upd);
+  }).catch(() => {});
+}
+
+/* ------------------------------------------------------------- swiping --- */
+const track = $("track"), viewport = $("viewport");
+function setWs(i, animate) {
+  ui.ws = Math.max(0, Math.min(2, i));
+  track.style.transition = animate === false ? "none" : "transform .25s cubic-bezier(.2,.8,.2,1)";
+  track.style.transform = `translateX(${-ui.ws * (100/3)}%)`;
+  [...$("dots").children].forEach((d, j) => d.classList.toggle("on", j === ui.ws));
+}
+$("dots").addEventListener("click", e => { const i = e.target.dataset.go; if (i != null) setWs(+i); });
+let swipeActive = false;
+function swipeStart(e) { if (e.target.closest("#pad")) return; swipeActive = true; ui.dragStartX = e.clientX; ui.dragDX = 0; }
+function swipeMove(e) { if (!swipeActive) return; ui.dragDX = e.clientX - ui.dragStartX;
+  track.style.transition = "none";
+  track.style.transform = `translateX(calc(${-ui.ws * (100/3)}% + ${ui.dragDX}px))`; }
+function swipeEnd() { if (!swipeActive) return; swipeActive = false;
+  let next = ui.ws; if (ui.dragDX < -60 && next < 2) next++; if (ui.dragDX > 60 && next > 0) next--;
+  setWs(next); }
+$("hdr").addEventListener("pointerdown", swipeStart);
+window.addEventListener("pointermove", swipeMove);
+window.addEventListener("pointerup", swipeEnd);
+$("pic").addEventListener("pointerdown", swipeStart);
+$("pic").addEventListener("pointermove", swipeMove);
+$("pic").addEventListener("pointerup", swipeEnd);
+setWs(0, false);
+
+/* ---------------------------------------------------------------- rec ----- */
+$("recBtn").onclick = () => post("/api/action", {name: LAST.recording?.on ? "record_stop" : "record_start"});
+$("stop").onclick = () => post("/api/stop", {reason: "phone STOP"});
+
+/* -------------------------------------------------------------- stick ----- */
+const pad = $("pad"), knob = $("knob");
+function padGeom(e) {
+  const r = pad.getBoundingClientRect();
+  let dx = (e.clientX - r.left - r.width/2) / (r.width/2);
+  let dy = (e.clientY - r.top - r.height/2) / (r.height/2);
+  const m = Math.hypot(dx, dy); if (m > 1) { dx /= m; dy /= m; }
+  return {pan: dx, tilt: -dy};
+}
+pad.addEventListener("pointerdown", e => {
+  const ready = LAST.state === "connected" && LAST.telemetry;
+  if (!ready) { toast(LAST.fault ? "stick neutralised · fault" : "no camera"); return; }
+  if (LAST.armed || (LAST.move && LAST.move.running)) toast("manual input · move aborted · disarmed");
+  ui.padHeld = true; pad.setPointerCapture(e.pointerId);
+  const g = padGeom(e); ui.padTilt = g.tilt; ui.padPan = g.pan; ui.padDirty = true;
+  knob.style.left = (50 + g.pan*38) + "%"; knob.style.top = (50 - g.tilt*38) + "%";
+});
+pad.addEventListener("pointermove", e => {
+  if (!ui.padHeld) return;
+  const g = padGeom(e); ui.padTilt = g.tilt; ui.padPan = g.pan; ui.padDirty = true;
+  knob.style.left = (50 + g.pan*38) + "%"; knob.style.top = (50 - g.tilt*38) + "%";
+});
+function padRelease() {
+  if (!ui.padHeld) return;
+  ui.padHeld = false; ui.padTilt = 0; ui.padPan = 0; ui.padDirty = true;
+  knob.style.left = knob.style.top = "50%";
+}
+pad.addEventListener("pointerup", padRelease);
+pad.addEventListener("pointercancel", padRelease);
+window.addEventListener("blur", padRelease);
+setInterval(() => {
+  if (!ui.padDirty) return;
+  ui.padDirty = ui.padHeld;
+  post("/api/stick", {tilt: ui.padTilt, pan: ui.padPan});
+}, 40);
+
+$("capture").onclick = () => post("/api/waypoint", {duration: 3.0});
+
+/* --------------------------------------------------------------- arm ------ */
+function wireArm(btn) {
+  const start = () => {
+    const ready = LAST.state === "connected" && LAST.telemetry;
+    if (!ready) return toast("no camera");
+    if (!LAST.move || LAST.move.waypoints.length < 2) return toast("two points make a move");
+    if (ui.phoneBatt != null && ui.phoneBatt < 10) return toast(`arm refused · phone ${ui.phoneBatt}% — charge first`);
+    ui.armHoldStart = Date.now();
+    btn.querySelector("i").style.transition = "none"; btn.querySelector("i").style.width = "0%";
+    requestAnimationFrame(() => { btn.querySelector("i").style.transition = "width .7s linear"; btn.querySelector("i").style.width = "100%"; });
+    ui.armHoldT = setTimeout(() => post("/api/arm"), 700);
+  };
+  const cancel = () => { clearTimeout(ui.armHoldT); btn.querySelector("i").style.transition = "none"; btn.querySelector("i").style.width = "0%"; };
+  btn.addEventListener("pointerdown", start);
+  btn.addEventListener("pointerup", cancel);
+  btn.addEventListener("pointerleave", cancel);
+}
+wireArm($("armBtn")); wireArm($("armBtn2"));
+$("clearBtn").onclick = () => post("/api/move", {waypoints: [], loop: false, ping_pong: false, name: "untitled"});
+$("backToOne").onclick = () => post("/api/backtoone", {duration: 2.5});
+$("reReference").onclick = () => post("/api/move/reference", {});
+document.querySelectorAll("[data-retime]").forEach(b =>
+  b.onclick = () => post("/api/move/retime", {factor: +b.dataset.retime}));
+
+/* -------------------------------------------------------- exposure sheet -- */
+function openSheet(name) { ui.sheet = name; $("overlay").classList.add("on"); $("sheet").classList.add("on"); render(LAST); }
+function closeSheet() { ui.sheet = null; ui.wpEdit = -1; $("overlay").classList.remove("on"); $("sheet").classList.remove("on"); }
+$("overlay").onclick = closeSheet; $("sheetDone").onclick = closeSheet;
+$("chipIso").onclick = () => openSheet("exposure");
+$("chipShutter").onclick = () => openSheet("exposure");
+$("chipWb").onclick = () => openSheet("exposure");
+const ISO_OPTS = ["auto","100","200","400","800","1600","3200","6400"];
+const SHUTTER_OPTS = [24,25,30,48,50,60,100,120,200,400,800,1000,2000,4000];
+const WB_OPTS = ["auto",3200,4300,5600,6500];
+const PROFILE_OPTS = ["normal","hdr","d-log","d-log2"];
+
+/* --------------------------------------------------------- takes/compare - */
+$("compareBtn").onclick = async () => {
+  const r = await fetch("/api/takes").then(r => r.json());
+  const takes = r.takes || [];
+  if (takes.length < 2) return toast("need two takes");
+  const a = takes[takes.length - 2], b = takes[takes.length - 1];
+  const out = await post("/api/takes/compare", {first: a.id, second: b.id, fov_deg: 84});
+  if (!out || !out.ok) return;
+  const c = out.comparison;
+  const el = $("compareOut");
+  el.className = c.verdict === "matched" ? "matched" : c.verdict === "needs stabilise" ? "stab" : "no";
+  el.innerHTML = `<b>${c.verdict}</b> — ${c.takes[0]} vs ${c.takes[1]}: peak <b>${c.peak_px} px</b> (${c.peak_deg}°) at ${c.peak_at}s, rms ${c.rms_px} px. Assumes an 84° field of view — this is not your lens; set it in a future pass.`;
+};
+$("logTake").onclick = () => post("/api/take", {note: ""});
+$("takeRow").onclick = () => post("/api/take/circle");
+
+/* -------------------------------------------------------------- system --- */
+$("connBtn").onclick = () => { if (LAST.state === "connected") post("/api/disconnect"); else post("/api/connect"); };
+$("noLinkGo").onclick = () => setWs(2);
+document.querySelectorAll("[data-feel]").forEach(b => b.onclick = () => post("/api/ramp", {ramp: b.dataset.feel}));
+document.querySelectorAll("[data-lock]").forEach(b => b.onclick = () => {
+  const v = b.dataset.lock;
+  post("/api/clutch/lock", {tilt: v === "pan", pan: v === "tilt"});
+});
+document.querySelectorAll("[data-thumb]").forEach(b => b.onclick = () => {
+  ui.thumb = b.dataset.thumb; localStorage.setItem("osmo_thumb", ui.thumb); render(LAST);
+});
+$("lockChip").onclick = () => openSheet("lock-hint");
+
+/* -------------------------------------------------------------- lapse ----- */
+const LAPSE_CLIP = [4,8,12,20], LAPSE_FPS = [24,25,30], LAPSE_EXP = [0.5,1,2,4];
+function cycle(arr, cur) { return arr[(arr.indexOf(cur)+1) % arr.length]; }
+$("lapseClipCell").onclick = () => { ui.lapse.clip = cycle(LAPSE_CLIP, ui.lapse.clip); ui.lapse.planned = false; render(LAST); };
+$("lapseFpsCell").onclick = () => { ui.lapse.fps = cycle(LAPSE_FPS, ui.lapse.fps); ui.lapse.planned = false; render(LAST); };
+$("lapseExpCell").onclick = () => { ui.lapse.exp = cycle(LAPSE_EXP, ui.lapse.exp); ui.lapse.planned = false; render(LAST); };
+let lapsePlan = null;
+$("lapseCost").onclick = async () => {
+  if (!LAST.move || LAST.move.waypoints.length < 2) return toast("two points make a move");
+  const r = await post("/api/timelapse/plan", {playback_s: ui.lapse.clip, output_fps: ui.lapse.fps, expose_s: ui.lapse.exp});
+  if (r && r.plan) { lapsePlan = r.plan; ui.lapse.planned = true; render(LAST); }
+};
+$("lapseToggle").onclick = async () => {
+  if (LAST.timelapse && LAST.timelapse.running) return post("/api/timelapse/stop");
+  if (!ui.lapse.planned) return toast("cost it first");
+  if (ui.phoneBatt != null && ui.phoneBatt < 10) return toast(`refused · phone ${ui.phoneBatt}%`);
+  await post("/api/timelapse/start", {playback_s: ui.lapse.clip, output_fps: ui.lapse.fps, expose_s: ui.lapse.exp});
+  setWs(0);
+};
+let resumeInfo = null;
+$("lapseResumeBtn").onclick = () => post("/api/timelapse/start", {resume: true});
+fetch("/api/timelapse/resume").then(r => r.json()).then(j => {
+  resumeInfo = j; if (j && j.available) render(LAST);
+}).catch(() => {});
+
+/* ---------------------------------------------------------------- poll --- */
+let LAST = {clutch:{}, move:{waypoints:[]}, recording:{}, camera:{}, limit_axes:{}, travel:{}, preroll:{}};
+function fmt(t) { const h = Math.floor(t/3600), m = Math.floor(t/60)%60, s = Math.floor(t%60);
+  return [h,m,s].map(n => String(n).padStart(2,"0")).join(":"); }
+function frac(angle, axis) {
+  const a = LAST.travel && LAST.travel[axis]; if (!a) return 0.5;
+  let f = ((angle - a.start + 540) % 360) / a.span;
+  return Math.max(0, Math.min(1, f));
+}
+
+async function poll() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    LAST = s; render(s);
+  } catch (e) { /* keep last render; the LAN blipped */ }
+}
+poll(); setInterval(poll, 300);
+
+function render(s) {
+  const ready = s.state === "connected" && s.telemetry;
+  const confirmed = false; // the camera never reports its tally over any implemented command
+  const rec = s.recording || {};
+
+  // header
+  const recBox = $("recBox");
+  recBox.classList.toggle("on", !!rec.on); recBox.classList.toggle("confirmed", confirmed);
+  $("recWord").textContent = rec.on ? "REC · UNCONFIRMED" : "STBY";
+  if (rec.on && rec.since) $("recTime").textContent = fmt(Date.now()/1000 - rec.since);
+  else $("recTime").textContent = "00:00:00";
+  if (s.fault) { $("recBox").classList.add("hidden"); } else { $("recBox").classList.remove("hidden"); }
+
+  const pw = s.power || {};
+  $("camBatt").innerHTML = pw.percent != null ? `${pw.percent}%${pw.charging ? " +" : ""}` : "--";
+  const linkEl = $("linkState");
+  if (s.fault) { linkEl.textContent = "FAULT"; linkEl.style.color = "var(--fault)"; }
+  else if (ready) { linkEl.textContent = "READY"; linkEl.style.color = "var(--ok)"; }
+  else if (s.state === "connecting") { linkEl.textContent = (s.stage || "…").toUpperCase(); linkEl.style.color = "var(--warn)"; }
+  else if (s.state === "error") { linkEl.textContent = "ERROR"; linkEl.style.color = "var(--fault)"; }
+  else { linkEl.textContent = "OFFLINE"; linkEl.style.color = "var(--faint)"; }
+
+  $("recBtn").classList.toggle("ready", ready);
+  $("recBtn").classList.toggle("on", !!rec.on);
+
+  const armed = !!s.armed, running = !!(s.move && s.move.running), waitingCue = s.move && s.move.waiting_cue != null;
+  $("stop").classList.toggle("armed", armed || running);
+  $("stop").classList.toggle("fault", !!s.fault);
+
+  // pic / envelope
+  $("pic").classList.toggle("rec", !!rec.on); $("pic").classList.toggle("confirmed", confirmed);
+  $("noLink").classList.toggle("hidden", ready);
+  if (!ready) {
+    let title = "NO CAMERA", body = "Pair once in SYSTEM. Approve on the camera screen if asked.";
+    if (s.fault) { title = "FAULT"; body = s.fault; }
+    else if (s.state === "connecting") { title = (s.stage || "…").toUpperCase(); body = "Head is not armed until telemetry is fresh."; }
+    else if (s.state === "error") { title = "LINK ERROR"; body = s.error || ""; }
+    $("noLinkTitle").textContent = title; $("noLinkBody").textContent = body;
+  }
+  const lim = s.limit_axes || {};
+  const p = lim.pitch || {low:0, high:0}, y = lim.yaw || {low:0, high:0};
+  $("wedgeTop").style.height = (p.high * 0.3) + "%"; $("wedgeBot").style.height = (p.low * 0.3) + "%";
+  $("wedgeR").style.width = (y.high * 0.3) + "%"; $("wedgeL").style.width = (y.low * 0.3) + "%";
+
+  if (typeof s.pitch === "number" && typeof s.yaw === "number") {
+    const rl = 100*frac(s.yaw, "yaw"), rt = 100*(1 - frac(s.pitch, "pitch"));
+    $("reticle").style.left = rl + "%"; $("reticle").style.top = rt + "%";
+    $("panTxt").textContent = `${s.yaw >= 0 ? "+" : "−"}${Math.abs(s.yaw).toFixed(1)}°`;
+    $("tiltTxt").textContent = `${s.pitch >= 0 ? "+" : "−"}${Math.abs(s.pitch).toFixed(1)}°`;
+  } else { $("panTxt").textContent = "--"; $("tiltTxt").textContent = "--"; }
+
+  const wps = (s.move && s.move.waypoints) || [];
+  const ghosts = $("ghosts");
+  if (ghosts.childElementCount !== wps.length) ghosts.innerHTML = wps.map(() => `<div class="ghost"></div>`).join("");
+  [...ghosts.children].forEach((el, i) => {
+    const w = wps[i];
+    el.style.left = (100*frac(w.yaw, "yaw")) + "%"; el.style.top = (100*(1 - frac(w.pitch, "pitch"))) + "%";
+    el.textContent = `P${i+1}`; el.classList.toggle("cue", !!w.cue);
+  });
+
+  const cam = s.camera || {};
+  $("chipIso").textContent = "ISO " + (cam.iso ?? "--");
+  $("chipShutter").textContent = cam.shutter ? "1/" + cam.shutter : "1/--";
+  $("chipWb").textContent = (cam.wb == null ? "AUTO" : cam.wb + "K");
+
+  const cd = s.preroll || {};
+  const counting = cd.until && cd.until > Date.now()/1000;
+  $("countdown").classList.toggle("on", !!counting);
+  if (counting) $("countN").textContent = Math.max(0, Math.ceil(cd.until - Date.now()/1000));
+
+  // feel / lock chips
+  $("feelChip").textContent = RAMP_LABEL[s.ramp] || (s.ramp || "").toUpperCase();
+  const cl = s.clutch || {};
+  const lockOn = cl.lock_tilt || cl.lock_pan;
+  $("lockChip").textContent = lockOn ? (cl.lock_tilt ? "PAN ONLY" : "TILT ONLY") : "LOCK";
+  $("lockChip").classList.toggle("on", !!lockOn);
+
+  // move state / act row (mirrored on SHOOT and MOVES)
+  const total = s.move ? s.move.total_duration : 0;
+  const stateWord = !ready ? "NO CAMERA" : s.fault ? "FAULT · DISARMED"
+    : running ? (waitingCue ? `HOLDING P${s.move.waiting_cue + 1} · WAITING FOR GO` : `RUNNING · ${s.move.elapsed.toFixed(1)} / ${total.toFixed(1)}s`)
+    : counting ? "ROLLING · COUNTING"
+    : armed ? "ARMED · STATIONARY"
+    : wps.length < 2 ? (wps.length ? "ONE POINT · CAPTURE ANOTHER" : "NO MOVE · CAPTURE POINTS")
+    : "SAFE · DISARMED";
+  $("moveState").textContent = stateWord;
+  $("moveState").className = s.fault ? "fault" : (running || armed || counting) ? "busy" : "";
+  $("moveState2").textContent = stateWord;
+  $("moveSummary").textContent = wps.length ? `${wps.length} pts · ${total.toFixed(1)}s` : "—";
+
+  const showArm = !armed && !running && !counting, showRoll = armed && !running && !counting, showGo = waitingCue;
+  function paintActRow(row, armBtn) {
+    row.querySelectorAll(".act.roll,.act.go,.act.play").forEach(n => n.remove());
+    armBtn.classList.toggle("hidden", !showArm);
+    armBtn.classList.toggle("dim", !ready || wps.length < 2);
+    if (showRoll) {
+      const roll = document.createElement("div"); roll.className = "act roll"; roll.textContent = "● ROLL";
+      roll.onclick = () => post("/api/move/roll", {});
+      const play = document.createElement("div"); play.className = "act play"; play.style.cssText = "flex:0 0 64px;height:44px;display:grid;place-items:center;font-size:11px;letter-spacing:.1em;cursor:pointer;border:2px solid #fff;color:#fff";
+      play.textContent = "PLAY"; play.onclick = () => post("/api/move/play", {});
+      row.append(roll, play);
+    }
+    if (showGo) {
+      const go = document.createElement("div"); go.className = "act go"; go.textContent = "GO";
+      go.onclick = () => post("/api/cue/go", {}); row.append(go);
+    }
+  }
+  paintActRow($("moveActRow"), $("armBtn"));
+  $("movesActRow2").classList.toggle("hidden", wps.length === 0);
+  if (wps.length) paintActRow($("movesActRow2"), $("armBtn2"));
+  $("capture").classList.toggle("dim", !ready || running);
+  $("capture").textContent = `CAPTURE P${wps.length + 1}`;
+
+  // gauges on the pad
+  const gauge = (id, room) => { const o = room < 25 ? Math.min(1, (25-room)/25) : 0;
+    $(id).style.opacity = o.toFixed(2); $(id).style.stroke = room < 8 ? "#ff453a" : "#ffb020"; };
+  gauge("gaugeUp", p.high_deg ?? 99); gauge("gaugeDown", p.low_deg ?? 99);
+  gauge("gaugeR", y.high_deg ?? 99); gauge("gaugeL", y.low_deg ?? 99);
+  $("pad").classList.toggle("ready", ready);
+
+  // moves screen
+  $("moveName").textContent = (s.move && s.move.name) || "untitled";
+  $("moveCount").textContent = `${wps.length} pts · ${total.toFixed(1)}s`;
+  $("wpEmpty").classList.toggle("hidden", wps.length > 0);
+  const arrival = []; { let acc = 0; wps.forEach((w,i) => { if (i) acc += w.duration; arrival.push(acc); acc += w.dwell; }); }
+  $("playhead").style.width = total ? (100 * (s.move.elapsed || 0) / total).toFixed(1) + "%" : "0%";
+  const markers = $("markers");
+  if (markers.childElementCount !== wps.length) markers.innerHTML = wps.map(() => `<div class="mk"><b></b></div>`).join("");
+  [...markers.children].forEach((el, i) => {
+    el.style.left = total ? (100 * arrival[i] / total).toFixed(1) + "%" : "0%";
+    el.classList.toggle("cue", !!wps[i].cue); el.querySelector("b").textContent = `P${i+1}`;
+  });
+  const wpList = $("wpList");
+  if (wpList.childElementCount !== wps.length) {
+    wpList.innerHTML = wps.map((_, i) => `<div class="wprow" data-i="${i}">
+      <div class="lbl">P${i+1}</div>
+      <div><div class="pos"></div><div class="tm"></div></div>
+      <div class="cuetag"></div></div>`).join("");
+    [...wpList.children].forEach(row => row.onclick = () => openWaypointSheet(+row.dataset.i));
+  }
+  [...wpList.children].forEach((row, i) => {
+    const w = wps[i];
+    row.classList.toggle("cur", running && s.move.waiting_cue === i);
+    row.querySelector(".pos").textContent = `pan ${w.yaw.toFixed(1)}°  tilt ${w.pitch.toFixed(1)}°`;
+    row.querySelector(".tm").textContent = (i ? `move ${w.duration}s · ` : "") + `hold ${w.cue ? "until GO" : w.dwell + "s"}`;
+    const tag = row.querySelector(".cuetag"); tag.textContent = w.cue ? "GO" : "STOP"; tag.classList.toggle("on", !!w.cue);
+  });
+
+  $("betweenTakes").classList.toggle("hidden", wps.length === 0);
+  const sc = s.start_check || {};
+  const atOne = sc.known && sc.at_start;
+  $("startChk").textContent = wps.length ? (sc.known ? (atOne ? "AT P1" : "NOT AT P1") : "—") : "—";
+  $("startChk").className = atOne ? "at" : "off";
+  $("backToOne").classList.toggle("dim", !wps.length || atOne);
+  $("clearBtn").classList.toggle("dim", wps.length === 0);
+  $("clearBtn").onclick = wps.length ? () => post("/api/move", {waypoints: [], loop:false, ping_pong:false, name:"untitled"}) : null;
+
+  // takes
+  const takes = s.takes || [];
+  $("slate").textContent = `${s.slate ? s.slate.scene + s.slate.shot : ""} / ${s.slate ? s.slate.take : ""}`;
+  $("compareBtn").classList.toggle("dim", (s.take_count || 0) < 2);
+  const last = takes[takes.length - 1];
+  const tr = $("takeRow");
+  tr.classList.toggle("hidden", !last);
+  if (last) {
+    tr.classList.toggle("circled", !!last.circled);
+    const m = last.motion || {};
+    const vcls = m.verdict === "clean" ? "clean" : "bad";
+    tr.innerHTML = `<span class="id">${s.slate ? s.slate.scene + s.slate.shot : ""}/${last.take}</span>
+      <span class="n">${last.note || last.move || ""}${last.circled ? " ◎" : ""}</span>
+      <span class="v ${vcls}">${m.verdict || ""}</span>`;
+  }
+  $("pastTakes").innerHTML = takes.slice(0, -1).slice(-6).reverse().map(t =>
+    `<div class="tk"><span>${t.take}</span><span style="flex:1">${t.note || t.move || ""}</span><span>${(t.motion||{}).verdict||""}</span></div>`).join("");
+
+  // timelapse
+  const tl = s.timelapse || {};
+  $("lapseClip").textContent = ui.lapse.clip + "s"; $("lapseFps").textContent = ui.lapse.fps; $("lapseExp").textContent = ui.lapse.exp + "s";
+  if (tl.running) {
+    $("lapseSum").textContent = `RUNNING · frame ${tl.frame}/${tl.frames}`; $("lapseSum").classList.add("ready");
+    $("lapseToggle").textContent = "STOP LAPSE"; $("lapseToggle").classList.add("running"); $("lapseToggle").classList.remove("dim");
+  } else if (ui.lapse.planned && lapsePlan) {
+    $("lapseSum").textContent = `${lapsePlan.frames} frames · ${(lapsePlan.shoot_s/60).toFixed(0)} min on set · ${lapsePlan.pitch_per_frame.toFixed(3)}° pitch / ${lapsePlan.yaw_per_frame.toFixed(3)}° yaw per frame${lapsePlan.warnings.length ? " · " + lapsePlan.warnings[0] : ""}`;
+    $("lapseSum").classList.add("ready");
+    $("lapseToggle").textContent = "START"; $("lapseToggle").classList.remove("running"); $("lapseToggle").classList.remove("dim");
+  } else {
+    $("lapseSum").textContent = wps.length < 2 ? "Needs a move with two or more points." : "Cost it before you commit an afternoon.";
+    $("lapseSum").classList.remove("ready");
+    $("lapseToggle").textContent = "START"; $("lapseToggle").classList.remove("running"); $("lapseToggle").classList.add("dim");
+  }
+  if (resumeInfo && resumeInfo.available) {
+    $("lapseResume").classList.add("on");
+    $("lapseResumeText").textContent = `Frame ${resumeInfo.frame}/${resumeInfo.frames}${resumeInfo.stale ? " · stale" : ""}${resumeInfo.matches === false ? " · move has changed since" : ""}`;
+  } else { $("lapseResume").classList.remove("on"); }
+
+  // system
+  $("connState").textContent = s.state.toUpperCase();
+  $("connBtn").textContent = s.state === "connected" ? "DISCONNECT" : s.state === "connecting" ? "CONNECTING…" : "CONNECT";
+  $("connBtn").classList.toggle("disc", s.state === "connected");
+  const showStages = s.state === "connecting" || ready || s.fault;
+  $("stages").classList.toggle("hidden", !showStages);
+  if (showStages) {
+    const connCls = ready ? "done" : "cur", telCls = s.telemetry ? "done" : "";
+    const connMark = ready ? "■" : "▸", telMark = s.telemetry ? "■" : "·";
+    const connDetail = s.fault ? "FAULT" : (s.stage || (ready ? "connected" : ""));
+    $("stages").innerHTML = `<div class="stage ${connCls}"><span class="mk">${connMark}</span><span class="n">CONNECTION</span><span class="d">${connDetail}</span></div>
+      <div class="stage ${telCls}"><span class="mk">${telMark}</span><span class="n">TELEMETRY</span><span class="d">${s.telemetry ? "fresh" : "waiting"}</span></div>`;
+  }
+
+  document.querySelectorAll("[data-feel]").forEach(b => b.classList.toggle("on", b.dataset.feel === s.ramp));
+  const lockVal = cl.lock_tilt ? "pan" : cl.lock_pan ? "tilt" : "free";
+  document.querySelectorAll("[data-lock]").forEach(b => b.classList.toggle("on", b.dataset.lock === lockVal));
+  document.querySelectorAll("[data-thumb]").forEach(b => b.classList.toggle("on", b.dataset.thumb === ui.thumb));
+  $("ownerTxt").textContent = (s.owner || "none").toUpperCase();
+  $("phoneBatt").textContent = ui.phoneBatt == null ? "not reported" : ui.phoneBatt + "%";
+  $("phoneBatt").style.color = ui.phoneBatt != null && ui.phoneBatt < 10 ? "var(--rec)" : ui.phoneBatt != null && ui.phoneBatt < 30 ? "var(--warn)" : "var(--ok)";
+
+  // sheet content, if open
+  if (ui.sheet === "exposure") renderExposureSheet(s);
+  else if (ui.sheet === "wp") renderWaypointSheet(s);
+  else if (ui.sheet === "lock-hint") {
+    $("sheetTitle").textContent = "AXIS LOCK";
+    $("sheetBody").innerHTML = `<div class="sheetnote">FREE moves both axes. PAN ONLY locks tilt; TILT ONLY locks pan. Set from SYSTEM › AXIS LOCK.</div>`;
+  }
+}
+
+function renderExposureSheet(s) {
+  const cam = s.camera || {};
+  $("sheetTitle").textContent = "EXPOSURE";
+  $("sheetBody").innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <div class="chip" id="isoCyc" style="height:56px">ISO ${cam.iso ?? "--"}</div>
+      <div class="chip" id="shCyc" style="height:56px">1/${cam.shutter ?? "--"}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <div class="chip" id="wbCyc" style="height:56px">${cam.wb == null ? "AUTO" : cam.wb + "K"}</div>
+      <div class="chip" id="colCyc" style="height:56px">${(cam.color || "normal").toUpperCase()}</div>
+    </div>
+    <div class="sheetnote" style="padding:8px 10px;background:#1a1408;color:#e3c07b">
+      Exposure opcodes are unverified on this body and the camera never reports them back — every value above is what was last asked for, not what the camera is doing. Change one and watch the camera screen.
+    </div>`;
+  $("isoCyc").onclick = () => post("/api/camera", {set:"iso", value: cycle(ISO_OPTS, String(cam.iso ?? "auto"))});
+  $("shCyc").onclick = () => post("/api/camera", {set:"shutter", value: cycle(SHUTTER_OPTS, cam.shutter ?? 50)});
+  $("wbCyc").onclick = () => post("/api/camera", {set:"wb", value: cycle(WB_OPTS, cam.wb ?? "auto")});
+  $("colCyc").onclick = () => post("/api/camera", {set:"color", value: cycle(PROFILE_OPTS, cam.color ?? "normal")});
+}
+
+function openWaypointSheet(i) { ui.wpEdit = i; openSheet("wp"); }
+function renderWaypointSheet(s) {
+  const w = s.move.waypoints[ui.wpEdit]; if (!w) { closeSheet(); return; }
+  $("sheetTitle").textContent = `POINT P${ui.wpEdit + 1}`;
+  const holdLabel = w.cue ? "GO" : w.dwell + "s";
+  $("sheetBody").innerHTML = `
+    <div style="font:500 12px var(--mono);color:var(--dim)">pan ${w.yaw.toFixed(1)}°  tilt ${w.pitch.toFixed(1)}°</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+      <div class="chip" id="mvCyc" style="height:56px;flex-direction:column">MOVE ${w.duration}s</div>
+      <div class="chip" id="hdCyc" style="height:56px">HOLD ${holdLabel}</div>
+      <div class="chip" id="esCyc" style="height:56px">${w.easing === "linear" ? "LINEAR" : "SMOOTH"}</div>
+    </div>
+    <div class="sheetnote">HOLD → GO parks the head here until you press GO on MOVES. The clock freezes; the frame is held, not drifted.</div>
+    <div class="btnline" id="wpDel" style="border-color:var(--faint);color:var(--dim)">DELETE POINT</div>`;
+  const patch = (fn) => {
+    const wps = s.move.waypoints.map((x,i) => i === ui.wpEdit ? {...x, ...fn(x)} : x);
+    post("/api/move", {waypoints: wps, loop: s.move.loop, ping_pong: s.move.ping_pong, name: s.move.name});
+  };
+  $("mvCyc").onclick = () => patch(x => ({duration: cycle([0.5,1,2,4,8,20], x.duration)}));
+  $("hdCyc").onclick = () => {
+    const holds = [0,0.5,1,2,5,"GO"]; const cur = x_cue_or_dwell(w);
+    const next = cycle(holds, cur);
+    patch(() => next === "GO" ? {cue: true, dwell: 0} : {cue: false, dwell: next});
+  };
+  $("esCyc").onclick = () => patch(x => ({easing: x.easing === "linear" ? "ease-in-out-sine" : "linear"}));
+  $("wpDel").onclick = () => {
+    const wps = s.move.waypoints.filter((_,i) => i !== ui.wpEdit);
+    post("/api/move", {waypoints: wps, loop: s.move.loop, ping_pong: s.move.ping_pong, name: s.move.name});
+    closeSheet();
+  };
+}
+function x_cue_or_dwell(w) { return w.cue ? "GO" : w.dwell; }
+</script>

@@ -1,0 +1,1133 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Osmo Pocket 4 Pro — Monitor</title>
+<style>
+/* ==========================================================================
+   Cine monitor.
+
+   One rule settles every argument here: the picture is the product and
+   everything else is a guest on top of it. Chrome earns its pixels or it goes
+   away, and DISP is how the operator throws the guests out.
+
+   Legibility outdoors comes from local pills, never a global scrim. Dimming
+   the whole frame to make text readable ruins the thing the text is describing.
+   ========================================================================== */
+:root{
+  --ink:#f2f4f5;                  /* not pure white: bloom on OLED in the dark */
+  --dim:#9aa3ab; --faint:#5d6975;
+  --live:#3dd6f5;                 /* active tool. Not red (record), not green  */
+                                  /* (health), not yellow (zebra/caution).     */
+  --rec:#ff453a; --warn:#ffb020; --ok:#4ce05b;
+  --chR:#ff6259; --chG:#4ce05b; --chB:#4c9aff;
+  --pill:rgba(10,12,14,.80);
+  --edge:rgba(255,255,255,.14);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;}
+html,body{height:100%;margin:0;background:#000;overscroll-behavior:none;}
+body{
+  font:13px/1.35 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  color:var(--ink); user-select:none; -webkit-user-select:none;
+  touch-action:manipulation;
+}
+body.sun{ --pill:rgba(10,12,14,.93); --ink:#fff; --edge:rgba(255,255,255,.22); }
+
+#stage{position:fixed; inset:0; overflow:hidden; background:#000;}
+#pic{position:absolute; inset:0; transition:transform .18s;}
+#feed,#assist{position:absolute; inset:0; width:100%; height:100%; object-fit:contain;}
+/* Sits directly over the feed rather than replacing it: the <img> keeps
+   decoding underneath, which is what the exposure assists sample. */
+#lutcv{position:absolute; inset:0; width:100%; height:100%; object-fit:contain;
+       display:none;}
+#lutcv.on{display:block;}
+
+/* A timelapse runs for hours with nobody watching the browser. When one is
+   going, it is the most important thing on this screen -- so it gets a band
+   of its own above the picture rather than a field in the strip, and it is
+   only there while it is running. */
+#tlband{position:absolute; top:0; left:0; right:0; z-index:9;
+        display:none; align-items:center; gap:12px; padding:7px 12px;
+        background:linear-gradient(180deg,rgba(10,12,14,.94),rgba(10,12,14,.72));
+        font-size:11px; letter-spacing:.06em;}
+#tlband.on{display:flex;}
+#tlband .n{color:var(--live); font-weight:700; font-family:var(--mono);
+           font-size:14px;}
+#tlband .k{color:var(--dim);}
+#tlband .rail{flex:1; height:4px; border-radius:2px;
+              background:rgba(255,255,255,.13); overflow:hidden;}
+#tlband .rail i{display:block; height:100%; width:0; background:var(--live);}
+#tlband button{font:inherit; font-size:10px; font-weight:700;
+               letter-spacing:.09em; background:var(--rec); color:#fff;
+               border:0; border-radius:5px; padding:5px 12px; cursor:pointer;}
+
+#framebar{position:absolute; left:50%; bottom:104px; transform:translateX(-50%);
+          display:none; align-items:center; gap:8px; z-index:8; font-size:10.5px;}
+#framebar.on{display:flex;}
+#framebar label{display:flex; align-items:center; gap:5px; color:var(--dim);
+                letter-spacing:.06em;}
+#framebar select{font:inherit; font-size:10.5px; background:#11161b;
+                 color:var(--ink); border:1px solid #2a323b; border-radius:5px;
+                 padding:2px 5px;}
+/* Amber: the frame is being shown as something other than what the sensor
+   sees. Same grammar as the shutter warning -- constrained, not broken. */
+#framebar .warn{color:#ffb000;}
+
+#lutbar{position:absolute; left:50%; bottom:104px; transform:translateX(-50%);
+        display:none; align-items:center; gap:10px; z-index:8; font-size:10.5px;}
+#lutbar.on{display:flex;}
+#lutbar.raised{bottom:136px;}
+#lutbar label{display:flex; align-items:center; gap:5px; color:var(--dim);
+              letter-spacing:.06em;}
+#lutbar input[type=range]{width:74px;}
+#lutbar button{font:inherit; font-size:10px; letter-spacing:.08em;
+               background:#161c23; color:var(--txt); border:1px solid #2a323b;
+               border-radius:5px; padding:3px 8px; cursor:pointer;}
+#lutName{color:var(--txt); font-weight:600; max-width:150px; overflow:hidden;
+         text-overflow:ellipsis; white-space:nowrap;}
+/* Not decoration. An operator who believes the look is baked in lights for
+   the wrong picture, so the monitor says what this is every time it is on. */
+#lutOnly{color:#ffb000; border:1px solid #6b4d09; background:#241c07;
+         border-radius:4px; padding:2px 6px; font-weight:700;
+         letter-spacing:.09em; font-size:9px;}
+#assist{pointer-events:none; image-rendering:pixelated; opacity:.9;}
+#guides{position:absolute; inset:0; width:100%; height:100%; pointer-events:none;}
+
+/* The tally is the frame itself: a dot can be missed, a red border around
+   everything you are looking at cannot, and it costs no picture at all. Thin,
+   because a thick one colour-biases the edge you are judging. */
+#tally{position:absolute; inset:0; pointer-events:none; border:0 solid var(--rec);
+       transition:border-width .12s;}
+/* Amber and dashed while the recording state is only this controller's
+   belief. The record opcode is unverified on this camera and nothing
+   reports the tally back, so a confident red border would be a claim we
+   cannot support -- and a false tally is the most expensive lie a monitor
+   can tell. Solid red is reserved for a state the camera confirms. */
+body.rec #tally{ border-width:3px; border-style:dashed; border-color:var(--warn); }
+body.rec.confirmed #tally{ border-style:solid; border-color:var(--rec); }
+
+.pill{
+  background:var(--pill); border:1px solid var(--edge); border-radius:12px;
+  -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+}
+
+/* ---------------- top HUD ---------------- */
+#hud{position:absolute; top:10px; left:50%; transform:translateX(-50%);
+     display:flex; overflow:hidden; z-index:6; max-width:calc(100vw - 210px);}
+.seg{display:flex; align-items:center; gap:7px; padding:6px 12px; white-space:nowrap;}
+.seg + .seg{ box-shadow:-1px 0 0 rgba(255,255,255,.08); }
+.seg .k{color:var(--dim); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+        font-weight:600;}
+.seg .v{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:12px;
+        font-weight:600;}
+.seg.nodata .v{ color:var(--faint); }
+/* The only pulsing element on screen. If anything else blinks, this stops
+   meaning "rolling" and starts meaning "something over there is animated". */
+.recdot{width:10px;height:10px;border-radius:50%;background:#6b7580;flex:none;}
+body.rec .recdot{ background:var(--warn); animation:beat 1.2s ease infinite; }
+body.rec.confirmed .recdot{ background:var(--rec); }
+@keyframes beat{ 50%{ opacity:.35; } }
+#recWord{font-weight:700; letter-spacing:.08em; font-size:11.5px;}
+body.rec #recWord{ color:var(--warn); }
+body.rec.confirmed #recWord{ color:var(--rec); }
+#tcMain{ font-size:17px; }
+/* Tenths, not frames. HH:MM:SS:FF asserts a frame clock and a timecode source
+   and this counter has neither -- it starts when a record command is accepted
+   and runs off the local monotonic clock. A number that merely looks like
+   timecode is worse on a set than no number at all. Demoted in colour because
+   a digit changing ten times a second is otherwise the loudest thing here. */
+#tcTenth{ color:var(--faint); font-size:17px; }
+#linkGlyph{width:11px;height:11px;border-radius:2px;background:var(--ok);flex:none;}
+#linkGlyph.poor{ background:var(--warn); } #linkGlyph.bad{ background:var(--rec); }
+
+/* ---------------- corners ---------------- */
+#leftcol{position:absolute; top:10px; left:10px; display:flex; flex-direction:column;
+         gap:7px; z-index:6;}
+.round{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;
+       background:var(--pill);border:1px solid var(--edge);color:var(--ink);
+       cursor:pointer;padding:0;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);}
+.round:active{ transform:scale(.94); }
+.round.on{ color:var(--live); border-color:rgba(61,214,245,.55); }
+/* One pill, and the outline carries the state. Two always-green badges spend
+   the colour channel on nothing. */
+#batt{display:flex; gap:9px; padding:4px 8px; font-family:var(--mono); font-size:11px;
+      width:max-content;}
+#batt span{ display:flex; align-items:center; gap:3px; }
+.bOk{color:var(--ok);} .bWarn{color:var(--warn);} .bLow{color:var(--rec);}
+
+#rightcol{position:absolute; top:50%; right:10px; transform:translateY(-50%);
+          display:flex; flex-direction:column; align-items:center; gap:12px; z-index:6;}
+#btnRec{width:62px;height:62px;border-radius:50%;border:3px solid rgba(255,255,255,.85);
+        background:var(--rec);cursor:pointer;padding:0;
+        transition:border-radius .16s, transform .1s, opacity .2s;}
+#btnRec:active{ transform:scale(.94); }
+/* Round starts, square stops. Shape survives glare and colour blindness where
+   a red/darker-red pair does not. */
+body.rec #btnRec{ border-radius:17px; }
+#btnDisp{padding:6px 11px;border-radius:10px;background:var(--pill);border:1px solid var(--edge);
+         color:var(--live);cursor:pointer;font-size:10px;letter-spacing:.1em;font-weight:700;
+         display:grid;gap:4px;justify-items:center;}
+#dispBar{display:flex;gap:3px;}
+#dispBar i{width:12px;height:3px;border-radius:2px;background:#39424e;}
+#dispBar i.on{ background:var(--live); }
+
+/* ---------------- bottom: status strip + tools ---------------- */
+#strip{position:absolute; left:50%; bottom:10px; transform:translateX(-50%);
+       display:flex; z-index:6;}
+.fld{padding:7px 14px; min-height:48px; text-align:center; min-width:76px; cursor:pointer; border:0;
+     background:none; color:inherit; font:inherit;}
+.fld .k{display:block;font-size:10px;letter-spacing:.08em;color:var(--dim);
+        text-transform:uppercase;font-weight:600;}
+.fld .v{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;}
+.fld + .fld{ box-shadow:-1px 0 0 rgba(255,255,255,.08); }
+.fld.nodata{ cursor:default; } .fld.nodata .v{ color:var(--faint); font-weight:500; }
+/* Amber, the panel's colour for "constrained": the shutter works, it will
+   just band under these lights. Not red -- nothing is broken and red is the
+   record tally. */
+.fld.flicker .v{ color:#ffb000; }
+.fld.flicker .k{ color:#9a7419; }
+.fld.assumed .k::after{ content:"?"; opacity:.7; margin-left:2px; }
+.fld:not(.nodata):hover .v{ color:var(--live); }
+
+/* Fourteen tools do not fit a scroller. A drawer shows all of them at once at
+   a size a thumb can hit, and costs nothing when shut -- which is most of the
+   time, because choosing tools happens in bursts between takes, not while
+   framing. */
+#tools{position:absolute; right:10px; bottom:10px; z-index:7; display:flex;
+       align-items:center; gap:6px;}
+#btnTools{padding:14px 18px;min-height:48px;border-radius:12px;background:var(--pill);border:1px solid var(--edge);
+          color:var(--ink);cursor:pointer;font-size:11px;font-weight:700;letter-spacing:.09em;}
+#btnTools.open{ color:var(--live); border-color:rgba(61,214,245,.55); }
+/* State stays visible with the drawer shut, or the operator has to open it
+   just to remember what is on. */
+#chips{display:flex; gap:4px; flex-wrap:wrap-reverse; max-width:46vw; justify-content:flex-end;}
+.chip{padding:3px 7px;border-radius:7px;background:rgba(61,214,245,.16);color:var(--live);
+      font-size:9.5px;font-weight:700;letter-spacing:.06em;}
+#drawer{position:absolute; left:50%; bottom:60px; transform:translateX(-50%) translateY(8px);
+        z-index:8; padding:10px; display:none; opacity:0; transition:opacity .14s, transform .14s;}
+#drawer.open{ display:block; opacity:1; transform:translateX(-50%) translateY(0); }
+#drawerGrid{display:grid; grid-template-columns:repeat(7,58px); gap:4px;}
+.tool{width:58px;height:56px;padding:0;background:none;border:0;border-radius:10px;
+      color:var(--dim);cursor:pointer;display:grid;justify-items:center;align-content:center;
+      gap:3px;font:inherit;}
+.tool span{font-size:9.5px;letter-spacing:.05em;font-weight:700;}
+.tool svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;
+          stroke-linecap:round;stroke-linejoin:round;}
+.tool:hover{ color:var(--ink); background:rgba(255,255,255,.05); }
+.tool.on{ color:var(--live); background:rgba(61,214,245,.14); }
+.tool.soon{ opacity:.42; }
+.grp{font-size:8.5px;letter-spacing:.12em;color:var(--faint);font-weight:700;
+     margin:8px 0 3px 3px;text-transform:uppercase;}
+
+/* ---------------- scopes ---------------- */
+#scopes{position:absolute; left:10px; bottom:58px; display:flex; align-items:flex-end;
+        gap:6px; z-index:5; pointer-events:none;}
+.scope{position:relative; padding:15px 5px 5px;}
+.scope b{position:absolute;top:4px;left:9px;font-size:8.5px;letter-spacing:.11em;
+         color:var(--dim);font-weight:700;}
+.scope u{position:absolute;top:4px;right:9px;font-size:8.5px;letter-spacing:.11em;
+         color:var(--faint);text-decoration:none;}
+.scope canvas{ display:block; border-radius:4px; }
+
+/* Traffic lights. Square dots, fixed RGB triplet, static, and parked at the
+   bottom of frame -- four separate cues that this is not the record light.
+   Any one alone fails peripherally; together they cannot be confused. */
+/* Labelled PREVIEW because that is what it measures. The census is taken
+   from a downscaled JPEG, which averages isolated clipped pixels away and
+   can invent others at block edges. A live warning, not proof of what the
+   sensor recorded. */
+#tl{ padding:15px 8px 7px; display:none; position:relative; }
+#tl u{ position:absolute; top:4px; right:8px; font-size:7.5px;
+       letter-spacing:.09em; color:var(--faint); text-decoration:none; }
+#tl.on{ display:block; }
+#tlGrid{ display:flex; gap:5px; }
+.tlch{ display:grid; gap:4px; justify-items:center; }
+.tldot{width:8px;height:8px;border-radius:2px;border:1px solid rgba(255,255,255,.25);
+       background:transparent;}
+.tlbar{width:4px;height:56px;border-radius:2px;background:#141a20;position:relative;
+       overflow:hidden;}
+.tlbar i{position:absolute;left:0;right:0;bottom:0;opacity:.6;}
+
+/* ---------------- gimbal ---------------- */
+/* This is a gimbal camera and the monitor had nothing about the head on it.
+   Where it is pointing and how much travel is left are the two things that
+   end a take when you get them wrong. */
+#gimbal{position:absolute; right:10px; bottom:74px; z-index:6; display:grid;
+        gap:6px; justify-items:center; padding:8px;}
+/* The ease preset belongs with the stick, not in a settings page: it is a
+   shot decision, changed between setups as often as a lens is. */
+#rampChip{font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--live);
+          background:none;border:0;cursor:pointer;padding:2px 4px;font-family:inherit;}
+#rampChip:hover{ color:var(--ink); }
+#stick{position:relative;width:78px;height:78px;border-radius:50%;touch-action:none;
+       cursor:grab;background:radial-gradient(circle,rgba(22,28,35,.75) 0%,rgba(8,11,15,.5) 72%);}
+#knob{position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px;border-radius:50%;
+      background:rgba(61,214,245,.9);box-shadow:0 0 12px rgba(61,214,245,.5);pointer-events:none;}
+/* Travel left, per direction, around the stick. Amber then red as a stop
+   approaches -- the same grammar as the engineering panel. */
+#travel{position:absolute; inset:-7px; pointer-events:none;}
+#travel path{ fill:none; stroke-width:3; stroke-linecap:round; opacity:0; }
+#zoomPill{padding:6px 12px;font-family:var(--mono);font-size:13px;cursor:pointer;}
+
+#punch{position:absolute; left:10px; top:10px; z-index:6; padding:5px 10px;
+       font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--live);
+       display:none;}
+#punch.on{ display:block; }
+
+/* ---------------- density ladder ----------------
+   SETUP   everything.
+   OPERATE the picture, exposure, tally and whatever scopes were asked for.
+           The furniture you only touch between takes goes away.
+   CLEAN   picture, tally, a readout, and a ghosted stop button.
+   Record state, the elapsed readout and the ability to STOP never hide at any
+   level. On a touch-only device, hiding the stop button is unshippable. */
+body.d-operate #leftcol, body.d-operate #zoomPill, body.d-operate #btnSettings,
+body.d-operate #btnMedia, body.d-operate #chips{ display:none; }
+body.d-operate .seg.opt{ display:none; }
+
+body.d-clean #leftcol, body.d-clean #strip, body.d-clean #tools, body.d-clean #scopes,
+body.d-clean #gimbal, body.d-clean #btnSettings, body.d-clean #btnMedia,
+body.d-clean #drawer{ display:none; }
+body.d-clean .seg.opt, body.d-clean #segLink{ display:none; }
+body.d-clean #hud{ left:auto; right:10px; transform:none; }
+body.d-clean #btnRec{ width:44px; height:44px; opacity:.28; border-width:2px; }
+body.d-clean #btnRec:hover{ opacity:.9; }
+/* Touching the picture brings the furniture back for a few seconds, so CLEAN
+   is not a mode you have to leave to check something. */
+body.peek #leftcol, body.peek #strip, body.peek #tools, body.peek #gimbal{ display:flex; }
+body.peek #btnRec{ width:62px; height:62px; opacity:1; }
+
+#toast{position:absolute;left:50%;bottom:96px;transform:translateX(-50%);padding:7px 14px;
+       font-size:12.5px;z-index:9;opacity:0;transition:opacity .2s;pointer-events:none;}
+#toast.on{ opacity:1; }
+#nofeed{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);
+        font-size:13px;}
+a.back{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);z-index:4;
+       color:var(--faint);font-size:10px;text-decoration:none;}
+@media (max-width:860px){
+  .fld{ min-width:58px; padding:5px 9px; } .fld .v{ font-size:14px; }
+  #drawerGrid{ grid-template-columns:repeat(5,58px); }
+  #hud{ max-width:calc(100vw - 130px); }
+}
+
+/* ---------------- portrait ----------------
+   A phone held upright, and the camera this drives shoots vertical anyway.
+   The landscape layout assumes width it does not have here: the side columns
+   and the picture fight for the same pixels, and the tool drawer runs off
+   both edges.
+
+   The picture is still the product, so it keeps the middle. Everything else
+   moves to the bands above and below it, which in portrait are large and
+   otherwise wasted -- a 16:9 picture in a 9:19.5 window leaves roughly a
+   third of the screen empty top and bottom.
+
+   Keyed on orientation rather than width: a narrow landscape window is still
+   landscape, and giving it this layout would waste the width it does have. */
+@media (orientation:portrait){
+  /* Side columns become horizontal rows in the top band. Kept as flex rather
+     than hidden -- an operator who loses the tally because they turned the
+     phone has lost the one thing that must never be ambiguous. */
+  #leftcol{ top:8px; left:8px; right:8px; flex-direction:row; flex-wrap:wrap;
+            align-items:flex-start; }
+  #rightcol{ top:auto; bottom:150px; right:8px; left:8px;
+             transform:none; flex-direction:row; justify-content:flex-end; }
+
+  /* The gimbal pod is the one control a thumb reaches for constantly, so in
+     portrait it goes where the thumb already is: bottom centre. */
+  #gimbal{ left:50%; right:auto; bottom:98px; transform:translateX(-50%);
+           flex-direction:row; }
+
+  #strip{ bottom:8px; left:8px; right:8px; transform:none;
+          justify-content:center; flex-wrap:wrap; }
+  #tools{ right:8px; bottom:56px; }
+  #scopes{ left:8px; right:8px; bottom:150px; justify-content:center;
+           flex-wrap:wrap; }
+  #drawer{ left:8px; right:8px; bottom:104px; transform:none; }
+  #drawerGrid{ grid-template-columns:repeat(4,1fr); }
+  /* The floating bars stack instead of sitting side by side. */
+  #framebar, #lutbar{ left:8px; right:8px; transform:none; flex-wrap:wrap;
+                      justify-content:center; }
+  #framebar{ bottom:196px; }
+  #lutbar{ bottom:150px; }
+  #lutbar.raised{ bottom:150px; }
+  #hud{ max-width:calc(100vw - 24px); }
+  .back{ display:none; }
+}
+</style>
+
+<div id="stage">
+  <div id="pic">
+    <img id="feed" alt="">
+    <canvas id="lutcv"></canvas>
+    <canvas id="assist"></canvas>
+    <canvas id="guides"></canvas>
+  </div>
+  <div id="nofeed">waiting for live view&hellip;</div>
+  <div id="tally"></div>
+  <div id="punch" class="pill">PUNCH 2&times;</div>
+
+  <div id="hud" class="pill">
+    <div class="seg"><i class="recdot"></i><span id="recWord">STBY</span></div>
+    <div class="seg"><span class="k">elapsed</span>
+      <span class="v"><span id="tcMain">00:00:00</span><span id="tcTenth">.0</span></span></div>
+    <div class="seg opt" id="segFmt"><span class="k">set</span><span class="v" id="vFmt">—</span></div>
+    <div class="seg" id="segLink" title="link health — click for detail">
+      <i id="linkGlyph"></i></div>
+  </div>
+
+  <div id="leftcol">
+    <button class="round" id="btnLock" title="lock the touch surface (L)">
+      <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+           stroke-width="1.7" stroke-linecap="round"><rect x="4.5" y="9" width="11" height="7.5" rx="1.6"/>
+        <path d="M7 9V6.6a3 3 0 0 1 6 0V9"/></svg></button>
+    <div id="batt" class="pill">
+      <span id="bCam" title="camera">
+        <svg viewBox="0 0 16 10" width="15" height="10" fill="none" stroke="currentColor"
+             stroke-width="1.2"><rect x=".6" y=".6" width="12" height="8.8" rx="1.6"/>
+          <path d="M14 3.4v3.2" stroke-linecap="round"/></svg><b>—</b></span>
+      <span id="bRig" title="this device">
+        <svg viewBox="0 0 10 16" width="10" height="14" fill="none" stroke="currentColor"
+             stroke-width="1.2"><rect x=".6" y=".6" width="8.8" height="14.8" rx="2"/></svg><b>—</b></span>
+    </div>
+  </div>
+
+  <div id="rightcol">
+    <button class="round" id="btnSettings" title="engineering panel">
+      <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+           stroke-width="1.6"><circle cx="10" cy="10" r="2.6"/>
+        <path d="M10 2.2v2M10 15.8v2M17.8 10h-2M4.2 10h-2M15.5 4.5l-1.4 1.4M5.9 14.1l-1.4 1.4M15.5 15.5l-1.4-1.4M5.9 5.9L4.5 4.5"/></svg></button>
+    <button class="round" id="btnMedia" title="media on the camera">
+      <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
+           stroke-width="1.6"><rect x="3" y="5.5" width="14" height="10" rx="2"/>
+        <path d="M3 12.6l3.6-3.2 3 2.6 3-2.8L17 12"/><circle cx="7.4" cy="8.6" r="1"/></svg></button>
+    <button id="btnRec" title="record (R)"></button>
+    <button id="btnDisp" title="chrome density (D)">DISP
+      <span id="dispBar"><i class="on"></i><i class="on"></i><i class="on"></i></span></button>
+  </div>
+
+  <div id="scopes"><div id="tl" class="pill"><b>CLIP</b><u>PREVIEW</u><div id="tlGrid"></div></div></div>
+
+  <div id="gimbal" class="pill">
+    <button id="rampChip" title="ease preset for live control (E)">FLUID</button>
+    <div id="stick"><div id="knob"></div>
+      <svg id="travel" viewBox="0 0 100 100">
+        <path id="tvUp"    d="M32 8 A44 44 0 0 1 68 8"/>
+        <path id="tvRight" d="M92 32 A44 44 0 0 1 92 68"/>
+        <path id="tvDown"  d="M68 92 A44 44 0 0 1 32 92"/>
+        <path id="tvLeft"  d="M8 68 A44 44 0 0 1 8 32"/>
+      </svg>
+    </div>
+    <div id="zoomPill">&times;<span id="zoomVal">1.0</span></div>
+  </div>
+
+  <div id="tlband">
+    <span class="k">TIMELAPSE</span>
+    <span class="n" id="tlbCount">0/0</span>
+    <div class="rail"><i id="tlbFill"></i></div>
+    <span class="k" id="tlbLeft"></span>
+    <button id="tlbStop">STOP</button>
+  </div>
+
+  <div id="framebar" class="pill">
+    <label>FRAME
+      <select id="frameRatio">
+        <option value="0">sensor</option>
+        <option value="2.39">2.39:1 scope</option>
+        <option value="2">2.00:1</option>
+        <option value="1.85">1.85:1 flat</option>
+        <option value="1.7778">16:9</option>
+        <option value="1.5">3:2</option>
+        <option value="1.3333">4:3</option>
+        <option value="1">1:1</option>
+        <option value="0.5625">9:16 vertical</option>
+      </select>
+    </label>
+    <label>MASK <input id="frameMask" type="range" min="0" max="100" value="70"></label>
+    <label>SQUEEZE
+      <select id="frameSqueeze">
+        <option value="1">none</option>
+        <option value="1.33">1.33x</option>
+        <option value="1.5">1.5x</option>
+        <option value="1.75">1.75x</option>
+        <option value="2">2x</option>
+      </select>
+    </label>
+    <span id="frameNote"></span>
+  </div>
+
+  <div id="lutbar" class="pill">
+    <span id="lutOnly">MONITOR ONLY</span>
+    <span id="lutName">no look</span>
+    <button id="lutLoad">LOAD .CUBE</button>
+    <button id="lutClear">CLEAR</button>
+    <label>MIX <input id="lutAmt" type="range" min="0" max="100" value="100"></label>
+    <label>EXP <input id="lutExp" type="range" min="-30" max="30" value="0"></label>
+    <span id="lutExpV">0.0</span>
+  </div>
+  <input type="file" id="lutFile" accept=".cube,.CUBE" style="display:none">
+
+  <div id="strip" class="pill"></div>
+
+  <div id="drawer" class="pill"><div id="drawerGrid"></div></div>
+  <div id="tools">
+    <div id="chips"></div>
+    <button id="btnTools">TOOLS</button>
+  </div>
+
+  <div id="toast" class="pill"></div>
+  <a class="back" href="/panel">&larr; engineering panel</a>
+</div>
+
+<script src="/monitor.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const feed = $("feed"), assistCv = $("assist"), guideCv = $("guides");
+
+/* Icons are drawn inline rather than pulled from a font: no network dependency,
+   and every glyph carries the same stroke weight as the UI around it. */
+const ICON = {
+  lut:'<circle cx="7.4" cy="10" r="4.6"/><circle cx="12.6" cy="10" r="4.6"/>',
+  peak:'<path d="M2.5 15.5l4.6-6 3.1 3.6 2.6-3.2 4.7 5.6z"/>',
+  falsec:'<circle cx="10" cy="10" r="7"/><path d="M10 3a7 7 0 0 1 0 14z" fill="currentColor" stroke="none"/>',
+  zebra:'<path d="M3.5 14L8 5M7.5 15L12 6M11.5 15L16 6"/>',
+  wave:'<path d="M2.5 10c1.2 0 1.2-4 2.4-4S6.1 14 7.3 14 8.5 7 9.7 7s1.2 6 2.4 6 1.2-9 2.4-9 1.2 6 2.4 6"/>',
+  parade:'<rect x="3" y="7" width="3.2" height="9" rx=".7"/><rect x="8.4" y="4" width="3.2" height="12" rx=".7"/><rect x="13.8" y="9" width="3.2" height="7" rx=".7"/>',
+  histo:'<path d="M2.5 16V12M6 16V7M9.5 16v-5M13 16V4M16.5 16v-8"/>',
+  vector:'<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2"/>',
+  lights:'<rect x="4" y="3.5" width="4" height="4" rx="1"/><rect x="4" y="12.5" width="4" height="4" rx="1"/><path d="M13 3.5v13"/>',
+  guides:'<rect x="3" y="4.5" width="14" height="11" rx="1" stroke-dasharray="2.6 2.2"/>',
+  grid:'<path d="M7.3 3.5v13M12.7 3.5v13M3.5 7.3h13M3.5 12.7h13"/>',
+  cross:'<path d="M10 4.5v11M4.5 10h11"/>',
+  mirror:'<path d="M10 3v14"/><path d="M7.6 6.5L3.5 10l4.1 3.5z"/><path d="M12.4 6.5L16.5 10l-4.1 3.5z"/>',
+  audio:'<path d="M4 8h2.6L10 5v10L6.6 12H4z"/><path d="M13 7.6a3.6 3.6 0 0 1 0 4.8"/>',
+};
+/* Grouped, because a grid of fourteen unsorted icons is a memory test. `soon`
+   is honest about the two the protocol cannot serve yet -- a dead button that
+   pretends to work is worse than one that says why. */
+const TOOLS = [
+  {id:"wave",  label:"WAVE",   grp:"scopes",   kind:"scope", w:210,h:104, sub:"RGB"},
+  {id:"parade",label:"PARADE", grp:"scopes",   kind:"scope", w:210,h:104, sub:"RGB"},
+  {id:"histo", label:"HISTO",  grp:"scopes",   kind:"scope", w:190,h:104, sub:"RGBL"},
+  {id:"vector",label:"VECTOR", grp:"scopes",   kind:"scope", w:112,h:104, sub:""},
+  {id:"lights",label:"LIGHTS", grp:"scopes",   kind:"tl"},
+  {id:"falsec",label:"FALSE",  grp:"exposure", kind:"assist"},
+  {id:"zebra", label:"ZEBRA",  grp:"exposure", kind:"assist"},
+  {id:"peak",  label:"PEAK",   grp:"focus",    kind:"assist"},
+  {id:"guides",label:"GUIDES", grp:"framing",  kind:"guide"},
+  {id:"grid",  label:"GRID",   grp:"framing",  kind:"guide"},
+  {id:"cross", label:"CROSS",  grp:"framing",  kind:"guide"},
+  {id:"frame", label:"FRAME",  grp:"framing",  kind:"frame"},
+  {id:"mirror",label:"MIRROR", grp:"framing",  kind:"mirror"},
+  {id:"lut",   label:"LUT",    grp:"look",     kind:"look"},
+  {id:"audio", label:"AUDIO",  grp:"sound",    kind:"soon"},
+];
+const on = {}; TOOLS.forEach(t => on[t.id] = false);
+
+const grid = $("drawerGrid");
+for (const t of TOOLS) {
+  const b = document.createElement("button");
+  b.className = "tool" + (t.kind === "soon" ? " soon" : "");
+  b.id = "tool_" + t.id; b.type = "button"; b.title = t.grp;
+  b.innerHTML = `<svg viewBox="0 0 20 20">${ICON[t.id]}</svg><span>${t.label}</span>`;
+  b.onclick = () => toggle(t);
+  grid.appendChild(b);
+}
+$("btnTools").onclick = () => {
+  const open = $("drawer").classList.toggle("open");
+  $("btnTools").classList.toggle("open", open);
+};
+/* Toggling does not close the drawer -- operators turn on two or three at a
+   time, and a drawer that shuts after each one triples the taps. */
+document.addEventListener("pointerdown", ev => {
+  if ($("drawer").classList.contains("open") &&
+      !$("drawer").contains(ev.target) && !$("tools").contains(ev.target)) {
+    $("drawer").classList.remove("open");
+    $("btnTools").classList.remove("open");
+  }
+}, true);
+
+function toggle(t) {
+  if (t.kind === "soon") { toast(t.label + " needs camera data this build has not got yet"); return; }
+  on[t.id] = !on[t.id];
+  $("tool_" + t.id).classList.toggle("on", on[t.id]);
+  if (t.kind === "scope") buildScopes();
+  if (t.kind === "tl") $("tl").classList.toggle("on", on[t.id]);
+  if (t.kind === "guide") drawGuides();
+  if (t.kind === "mirror") applySqueeze();
+  if (t.kind === "frame") {
+    $("framebar").classList.toggle("on", on.frame);
+    // Two floating bars in the same place would overlap.
+    $("lutbar").classList.toggle("raised", on.frame);
+    applySqueeze();
+    drawGuides();
+  }
+  if (t.kind === "look") {
+    $("lutbar").classList.toggle("on", on.lut);
+    if (!on.lut) $("lutcv").classList.remove("on");
+    if (on.lut && lutView && !lutView.supported) {
+      toast("LUT preview needs WebGL2: " + lutView.reason);
+    }
+  }
+  renderChips();
+}
+function renderChips() {
+  const box = $("chips"); box.innerHTML = "";
+  for (const t of TOOLS) {
+    if (!on[t.id]) continue;
+    const c = document.createElement("i");
+    c.className = "chip"; c.textContent = t.label; box.appendChild(c);
+  }
+}
+
+/* ---------------------------------------------------------------- scopes */
+function buildScopes() {
+  const host = $("scopes");
+  [...host.querySelectorAll(".scope")].forEach(n => n.remove());
+  let shown = 0;
+  for (const t of TOOLS) {
+    if (t.kind !== "scope" || !on[t.id]) continue;
+    // Two at once. Four stacked scopes eat the frame they are describing.
+    if (shown >= 2) { toast("two scopes at a time"); on[t.id] = false;
+                      $("tool_" + t.id).classList.remove("on"); continue; }
+    shown++;
+    const box = document.createElement("div");
+    box.className = "scope pill";
+    box.innerHTML = `<b>${t.label}</b><u>${t.sub}</u>`;
+    const c = document.createElement("canvas");
+    c.width = t.w; c.height = t.h; c.id = "sc_" + t.id;
+    box.appendChild(c);
+    host.insertBefore(box, $("tl"));
+  }
+  renderChips();
+}
+
+const TL_CH = [["R","var(--chR)"],["G","var(--chG)"],["B","var(--chB)"]];
+for (const [, colour] of TL_CH) {
+  const col = document.createElement("div");
+  col.className = "tlch";
+  col.innerHTML = `<i class="tldot"></i><div class="tlbar"><i></i></div><i class="tldot"></i>`;
+  col.querySelector(".tlbar i").style.background = colour;
+  $("tlGrid").appendChild(col);
+}
+function paintTL(t) {
+  [...$("tlGrid").children].forEach((col, i) => {
+    const colour = TL_CH[i][1];
+    const dots = col.querySelectorAll(".tldot");
+    const blown = t.high[i] > 0.002, crushed = t.low[i] > 0.002;
+    dots[0].style.background = blown ? colour : "transparent";
+    dots[0].style.borderColor = blown ? "#fff" : "rgba(255,255,255,.25)";
+    dots[1].style.background = crushed ? colour : "transparent";
+    dots[1].style.borderColor = crushed ? "#fff" : "rgba(255,255,255,.25)";
+    col.querySelector(".tlbar i").style.height = Math.round(t.mean[i] * 100) + "%";
+  });
+}
+
+/* ---------------------------------------------------------------- guides */
+/* Anamorphic desqueeze.
+
+   An anamorphic lens squeezes a wide field into the sensor's own aspect; the
+   picture only looks right once it is stretched back out. Doing that by
+   scaling X would push the image past the edges of the stage, so the same
+   aspect change is made by scaling Y down instead. The result on screen is
+   identical -- what matters is the RATIO between the axes -- and it is
+   guaranteed to stay inside the frame.
+
+   Mirror folds into the same transform because two competing writers of
+   `style.transform` means whichever ran last wins and the other silently
+   stops working. */
+function squeezeFactor() {
+  return on.frame ? (+$("frameSqueeze").value || 1) : 1;
+}
+function applySqueeze() {
+  const k = squeezeFactor();
+  const sx = on.mirror ? -1 : 1;
+  $("pic").style.transform = (k === 1 && sx === 1)
+    ? "" : `scaleX(${sx}) scaleY(${(1 / k).toFixed(4)})`;
+  const note = $("frameNote");
+  if (note) {
+    note.textContent = k === 1 ? "" : `desqueezed ${k}x — preview only`;
+    note.className = k === 1 ? "" : "warn";
+  }
+  drawGuides();
+}
+
+function drawGuides() {
+  const w = guideCv.width = guideCv.clientWidth;
+  const h = guideCv.height = guideCv.clientHeight;
+  const g = guideCv.getContext("2d");
+  g.clearRect(0, 0, w, h);
+  // The picture is letterboxed inside the canvas. Guides drawn to the canvas
+  // instead of the picture are guides for the wrong rectangle.
+  const ar = (feed.naturalWidth || 16) / (feed.naturalHeight || 9);
+  let pw = w, ph = w / ar;
+  if (ph > h) { ph = h; pw = h * ar; }
+  const ox = (w - pw) / 2, oy = (h - ph) / 2;
+  if (on.grid) {
+    g.strokeStyle = "rgba(255,255,255,.3)"; g.lineWidth = 1;
+    for (let i = 1; i < 3; i++) {
+      g.beginPath(); g.moveTo(ox + pw*i/3, oy); g.lineTo(ox + pw*i/3, oy+ph); g.stroke();
+      g.beginPath(); g.moveTo(ox, oy + ph*i/3); g.lineTo(ox+pw, oy + ph*i/3); g.stroke();
+    }
+  }
+  if (on.guides) {
+    g.strokeStyle = "rgba(255,255,255,.45)"; g.lineWidth = 1;
+    g.strokeRect(ox + pw*.05, oy + ph*.05, pw*.9, ph*.9);
+    g.strokeStyle = "rgba(255,255,255,.22)";
+    g.strokeRect(ox + pw*.10, oy + ph*.10, pw*.8, ph*.8);
+  }
+  // Delivery ratio. Drawn against the DESQUEEZED picture, because that is
+  // what will be delivered -- masking the squeezed frame would put the bars
+  // in the wrong place by exactly the squeeze factor.
+  if (on.frame) {
+    const target = +$("frameRatio").value || 0;
+    if (target > 0) {
+      // This canvas is a child of #pic, so it carries the desqueeze transform
+      // with it. A rectangle drawn here at aspect R therefore APPEARS at
+      // R * k. To show `target`, draw target / k and let the transform undo
+      // the difference -- the alternative is a mask that is wrong by exactly
+      // the squeeze factor, which looks plausible and frames the wrong shot.
+      const drawAspect = target / squeezeFactor();
+      let mw = pw, mh = pw / drawAspect;
+      if (mh > ph) { mh = ph; mw = ph * drawAspect; }
+      const mx = ox + (pw - mw) / 2, my = oy + (ph - mh) / 2;
+
+      const opa = (+$("frameMask").value || 0) / 100;
+      if (opa > 0) {
+        g.fillStyle = `rgba(0,0,0,${opa.toFixed(2)})`;
+        // Four bars rather than one rect with a hole: a hole needs even-odd
+        // fill, which some mobile canvases get wrong.
+        g.fillRect(ox, oy, pw, my - oy);
+        g.fillRect(ox, my + mh, pw, oy + ph - (my + mh));
+        g.fillRect(ox, my, mx - ox, mh);
+        g.fillRect(mx + mw, my, ox + pw - (mx + mw), mh);
+      }
+      g.strokeStyle = "rgba(255,255,255,.55)"; g.lineWidth = 1;
+      g.strokeRect(mx + .5, my + .5, mw - 1, mh - 1);
+
+      // Safe areas inside the DELIVERED frame, not the sensor frame. Action
+      // 90 percent, title 80 -- the broadcast convention, and still what a
+      // caption sits inside.
+      g.strokeStyle = "rgba(255,255,255,.30)";
+      g.strokeRect(mx + mw * .05, my + mh * .05, mw * .9, mh * .9);
+      g.strokeStyle = "rgba(255,255,255,.18)";
+      g.strokeRect(mx + mw * .10, my + mh * .10, mw * .8, mh * .8);
+    }
+  }
+
+  if (on.cross) {
+    g.strokeStyle = "rgba(255,255,255,.8)"; g.lineWidth = 1.4;
+    const cx = ox + pw/2, cy = oy + ph/2;
+    g.beginPath(); g.moveTo(cx-13, cy); g.lineTo(cx+13, cy);
+    g.moveTo(cx, cy-13); g.lineTo(cx, cy+13); g.stroke();
+  }
+}
+window.addEventListener("resize", drawGuides);
+
+/* -------------------------------------------------------------- monitor LUT
+   A viewing look. It changes the picture on this screen and nothing the
+   camera records -- so the exposure assists below deliberately keep sampling
+   the raw feed. False colour read off a graded picture would report the
+   look's exposure, not the recording's, which is the one number an operator
+   must be able to trust. */
+const lutView = new Monitor.LutView($("lutcv"));
+
+async function refreshLut() {
+  try {
+    const r = await fetch("/api/lut").then(x => x.json());
+    const info = r.info || {};
+    $("lutName").textContent = info.loaded ? info.name : "no look";
+    if (!lutView.supported) return;
+    if (!r.lut) { lutView.setTable(null); $("lutcv").classList.remove("on"); return; }
+    if (!lutView.setTable(r.lut)) toast("LUT rejected: " + lutView.reason);
+  } catch (e) { /* the status poll already reports a dead host */ }
+}
+
+$("frameRatio").onchange = drawGuides;
+$("frameMask").oninput = drawGuides;
+$("frameSqueeze").onchange = applySqueeze;
+
+$("lutLoad").onclick = () => $("lutFile").click();
+$("lutFile").onchange = async () => {
+  const f = $("lutFile").files[0];
+  if (!f) return;
+  const text = await f.text();
+  // Parsed on the host, not here: a malformed .cube does not fail loudly, it
+  // produces a table that is subtly wrong. The host names the bad line.
+  const r = await fetch("/api/lut", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ cube: text, name: f.name.replace(/\.cube$/i, "") }),
+  }).then(x => x.json()).catch(() => null);
+  $("lutFile").value = "";
+  if (!r || !r.ok) { toast((r && r.error) || "that .cube was refused"); return; }
+  await refreshLut();
+  toast("look loaded: " + (r.info ? r.info.name : ""));
+};
+$("lutClear").onclick = async () => {
+  await fetch("/api/lut", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ clear: true }),
+  }).catch(() => null);
+  await refreshLut();
+};
+$("lutAmt").oninput = () => { lutView.amount = +$("lutAmt").value / 100; };
+$("lutExp").oninput = () => {
+  // Tenths of a stop. A log look expects correct exposure going in, so this
+  // rides in front of the table rather than after it.
+  const stops = +$("lutExp").value / 10;
+  lutView.exposure = stops;
+  $("lutExpV").textContent = (stops > 0 ? "+" : "") + stops.toFixed(1);
+};
+refreshLut();
+
+/* ---------------------------------------------------------------- frame loop
+   Assists must keep up with the picture. Scopes are read, not watched, and one
+   at 12fps is indistinguishable from 30 while costing a third as much -- which
+   is what keeps the feed itself smooth. */
+// The source only changes every 33 ms, so sampling on every animation frame
+// re-analyses the same picture and spends the budget twice for nothing.
+let lastScope = 0, lastSample = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (!feed.naturalWidth) return;
+
+  // The look runs every frame; the assists below are throttled. Grading is
+  // watched, exposure is read.
+  if (on.lut && lutView.supported && lutView.hasTable()) {
+    $("lutcv").classList.toggle("on",
+      lutView.draw(feed, feed.naturalWidth, feed.naturalHeight));
+  } else {
+    $("lutcv").classList.remove("on");
+  }
+
+  if (now - lastSample < 32) return;
+  lastSample = now;
+  const anyAssist = on.falsec || on.zebra || on.peak;
+  const anyScope = TOOLS.some(t => t.kind === "scope" && on[t.id]) || on.lights;
+  if (!anyAssist && !anyScope) {
+    if (assistCv.width) assistCv.getContext("2d").clearRect(0,0,assistCv.width,assistCv.height);
+    return;
+  }
+  const s = Monitor.sample(feed);
+  if (!s) return;
+  Monitor.paintAssists(assistCv, s.lum,
+    {falsecolor:on.falsec, zebra:on.zebra, peaking:on.peak});
+  if (anyScope && now - lastScope > 100) {   // scopes are read, not watched
+    lastScope = now;
+    for (const t of TOOLS) {
+      if (t.kind === "scope" && on[t.id]) Monitor.renderScope($("sc_"+t.id), t.id, s.lum, s.rgb);
+    }
+    if (on.lights) paintTL(Monitor.trafficLights(s.rgb));
+  }
+}
+requestAnimationFrame(loop);
+
+/* ---------------------------------------------------------------- status */
+const FIELDS = [
+  {k:"ISO", id:"fIso", set:"iso", opts:["auto",100,200,400,800,1600,3200,6400]},
+  {k:"SHUTTER", id:"fShut", set:"shutter", opts:["1/25","1/50","1/100","1/200","1/320","1/500","1/1000"]},
+  // Shutter ANGLE, not speed. The angle is what sets the motion look, and it
+  // has to follow the frame rate to stay constant -- 1/48 is 180 degrees at
+  // 24fps and 150 at 20. Tapping it snaps to the film standard for whatever
+  // rate is current, which is the setting an operator wants ninety percent of
+  // the time and the one that is most annoying to work out by hand.
+  {k:"ANGLE", id:"fAngle", tap: () => post("/api/shutter", {angle: 180})},
+  {k:"MODE", id:"fMode"},
+  {k:"WB", id:"fWb", set:"wb", opts:["auto",2800,4000,5000,5500,6500,7500]},
+  {k:"FOCUS", id:"fFocus"},
+];
+// AUDIO is absent rather than a permanent em-dash. A dash for something the
+// protocol cannot ever supply makes a working monitor look like a broken
+// camera, and it spends room the truthful readouts need.
+for (const f of FIELDS) {
+  const b = document.createElement("button");
+  b.className = "fld"; b.id = f.id + "_w"; b.type = "button";
+  b.innerHTML = `<span class="k">${f.k}</span><span class="v" id="${f.id}">—</span>`;
+  // A DP's first instinct on seeing ISO is to change it. Read-only numbers on
+  // a touch screen are a trap.
+  if (f.set) b.onclick = () => cycle(f);
+  else if (f.tap) b.onclick = f.tap;
+  $("strip").appendChild(b);
+}
+function cycle(f) {
+  const cur = $(f.id).textContent;
+  const i = f.opts.findIndex(o => String(o) === cur);
+  const next = f.opts[(i + 1) % f.opts.length];
+  $(f.id).textContent = next;
+  post("/api/camera", {set: f.set, value: next});
+}
+function setField(id, v) {
+  const el = $(id), wrap = $(id + "_w");
+  const missing = v == null || v === "";
+  el.textContent = missing ? "—" : v;
+  wrap.classList.toggle("nodata", missing);
+}
+
+let recording = false, recStartedAt = null, connected = false, fpsNominal = 25;
+function fmtElapsed(sec) {
+  const p = n => String(n).padStart(2, "0");
+  const t = Math.floor(sec);
+  return [`${p(Math.floor(t/3600))}:${p(Math.floor(t/60)%60)}:${p(t%60)}`,
+          "." + Math.floor((sec % 1) * 10)];
+}
+
+function setTravel(id, v) {
+  const el = $(id); if (!el) return;
+  const t = (v || 0) / 100;
+  el.style.opacity = t <= 0.02 ? 0 : (0.5 + 0.5 * t).toFixed(2);
+  el.style.stroke = `hsl(${Math.round(46 - 46*t)} ${Math.round(60+32*t)}% ${Math.round(56-6*t)}%)`;
+}
+
+// Time remaining is computed from the frames actually shot so far, not from
+// the plan. The plan is an estimate made before anything moved; once frames
+// are going down, the rig's own pace is the better predictor and it is the
+// number the operator is really asking for.
+let tlSeenAt = null, tlSeenFrame = 0;
+
+function tlBand(t) {
+  const band = $("tlband");
+  if (!t || !t.running) {
+    band.classList.remove("on");
+    tlSeenAt = null;
+    return;
+  }
+  band.classList.add("on");
+  $("tlbCount").textContent = `${t.frame}/${t.frames}`;
+  $("tlbFill").style.width = t.frames
+    ? (100 * t.frame / t.frames).toFixed(1) + "%" : "0%";
+
+  const now = Date.now() / 1000;
+  if (tlSeenAt === null || t.frame < tlSeenFrame) {
+    tlSeenAt = now; tlSeenFrame = t.frame;
+  }
+  const done = t.frame - tlSeenFrame;
+  const secs = now - tlSeenAt;
+  let left = "";
+  if (done >= 2 && secs > 1) {
+    const remain = (t.frames - t.frame) * (secs / done);
+    left = remain > 90 ? `${Math.round(remain / 60)} min left`
+                       : `${Math.round(remain)}s left`;
+  } else if (t.plan && t.plan.per_frame_s) {
+    // Before there is a measured pace, fall back to the plan and SAY it is
+    // an estimate rather than presenting a guess as a measurement.
+    left = `~${Math.round((t.frames - t.frame) * t.plan.per_frame_s / 60)} min (est)`;
+  }
+  $("tlbLeft").textContent = left;
+}
+
+$("tlbStop").onclick = () => post("/api/timelapse/stop", {});
+
+async function poll() {
+  let s;
+  try { s = await (await fetch("/api/status")).json(); } catch (e) { connected = false; return; }
+  tlBand(s.timelapse);
+  connected = s.state === "connected";
+  const haveFrame = !!(s.live && s.live.have_frame);
+  $("nofeed").style.display = haveFrame ? "none" : "grid";
+  if (connected && !feed.src) feed.src = "/api/stream";
+
+  const R = s.recording || {};
+  recording = !!R.on;
+  document.body.classList.toggle("rec", recording);
+  // "REC ACK" says plainly that the command was accepted and nothing has
+  // confirmed it. Out loud, not buried in a tooltip.
+  document.body.classList.toggle("confirmed", !!R.reported);
+  $("recWord").textContent = !recording ? "STBY" : (R.reported ? "REC" : "REC ACK");
+  if (recording && recStartedAt == null) recStartedAt = performance.now();
+  if (!recording) recStartedAt = null;
+
+  // One glyph, not a developer's frame counter. Detail lives behind a click.
+  const fps = (s.live && s.live.fps) || 0;
+  const gl = $("linkGlyph");
+  gl.className = !connected || fps < 8 ? "bad" : fps < 20 ? "poor" : "";
+  $("segLink").title = `feed ${fps.toFixed(1)} fps · resyncs ${
+    (s.live && s.live.resyncs) ?? "—"} · decode errors ${(s.live && s.live.decode_errors) ?? "—"}`;
+
+  const cam = s.camera || {}, st = s.setup || {};
+  setField("fIso", cam.iso ?? st.iso);
+  setField("fShut", cam.shutter ?? st.shutter);
+  setField("fMode", cam.manual == null ? null : (cam.manual ? "Manual" : "Auto"));
+  setField("fWb", cam.wb ?? st.wb);
+  setField("fFocus", cam.focus_continuous == null ? null : (cam.focus_continuous ? "AF-C" : "AF-S"));
+
+  // The angle rests on a frame rate nothing reports back, so when the rate is
+  // only assumed the label is marked with a question mark rather than the
+  // number being presented as read.
+  const sh = st.shutter || {};
+  setField("fAngle", sh.angle_label || null);
+  const aw = $("fAngle_w");
+  aw.classList.toggle("flicker", !!sh.flickers);
+  aw.classList.toggle("assumed", sh.fps_reported === false);
+  aw.title = sh.denominator
+    ? `${sh.speed_label} at ${sh.fps}fps` +
+      (sh.fps_reported ? "" : " (frame rate assumed -- the camera does not report it)") +
+      (sh.flickers ? ` -- will band on ${sh.mains_hz}Hz mains; safe: ${(sh.safe||[]).map(d => "1/" + d).join(", ")}` : "")
+    : "tap to set the film standard, 180 degrees";
+
+  // Labelled "set": this is the last thing the panel asked for, and the
+  // camera never reports its recording format back.
+  const haveFmt = !!(cam.resolution && cam.fps);
+  $("vFmt").textContent = haveFmt ? `${cam.resolution} ${cam.fps}p` : "—";
+  $("segFmt").classList.toggle("nodata", !haveFmt);
+
+  const pw = s.power || {};
+  const cb = $("bCam");
+  cb.querySelector("b").textContent = pw.percent == null ? "—" : pw.percent + "%";
+  cb.className = pw.percent == null ? "" :
+    pw.percent < 10 ? "bLow" : pw.percent < 20 ? "bWarn" : "bOk";
+
+  // Travel left, per direction, exactly as the engineering panel reads it.
+  const L = s.limit_axes || {};
+  if (L.pitch) { setTravel("tvUp", L.pitch.known ? L.pitch.low : 0);
+                 setTravel("tvDown", L.pitch.known ? L.pitch.high : 0); }
+  if (L.yaw)   { setTravel("tvRight", L.yaw.known ? L.yaw.high : 0);
+                 setTravel("tvLeft", L.yaw.known ? L.yaw.low : 0); }
+  if (s.zoom != null) $("zoomVal").textContent = (+s.zoom).toFixed(1);
+  if (Array.isArray(s.ramps) && s.ramps.length) ramps = s.ramps.map(r => r.name);
+  if (s.ramp && s.ramp !== rampName) { rampName = s.ramp; showRamp(); }
+}
+setInterval(poll, 250); poll();
+
+/* Counted locally from the moment the record command was accepted. That makes
+   it elapsed time, not camera timecode, and it says so: a number that looks
+   like timecode but is not is worse on a set than no number at all. */
+function tick() {
+  requestAnimationFrame(tick);
+  const secs = recStartedAt == null ? 0 : (performance.now() - recStartedAt) / 1000;
+  const [m, f] = fmtElapsed(secs);
+  $("tcMain").textContent = m; $("tcTenth").textContent = f;
+}
+requestAnimationFrame(tick);
+
+/* ---------------------------------------------------------------- controls */
+async function post(path, body) {
+  try {
+    await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
+                       body: JSON.stringify(body || {})});
+  } catch (e) { toast("not connected"); }
+}
+let toastTimer = null;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("on"), 2200);
+}
+
+$("btnRec").onclick = () => {
+  post("/api/action", {name: recording ? "record_stop" : "record_start"});
+  // Optimistic: the record opcode is unverified on this camera and the tally
+  // must never be the thing that lags. The next poll corrects it.
+  recording = !recording;
+  document.body.classList.toggle("rec", recording);
+  if (recording) recStartedAt = performance.now();
+};
+$("btnSettings").onclick = () => location.href = "/panel";
+$("btnMedia").onclick = () => toast("media browser: not built yet");
+$("segLink").onclick = () => toast($("segLink").title);
+
+const DENSITY = ["setup", "operate", "clean"];
+let density = 0;
+function setDensity(i) {
+  density = (i + DENSITY.length) % DENSITY.length;
+  document.body.classList.remove("d-setup","d-operate","d-clean");
+  document.body.classList.add("d-" + DENSITY[density]);
+  [...$("dispBar").children].forEach((b, n) => b.classList.toggle("on", n <= 2 - density));
+  try { localStorage.setItem("osmo.density", density); } catch (e) {}
+  drawGuides();
+}
+$("btnDisp").onclick = () => setDensity(density + 1);
+try { setDensity(+(localStorage.getItem("osmo.density") || 0)); } catch (e) { setDensity(0); }
+
+// In CLEAN, touching the picture brings the furniture back briefly, so it is
+// not a mode you have to leave to check something.
+let peekTimer = null;
+$("pic").addEventListener("pointerdown", () => {
+  if (density !== 2) return;
+  document.body.classList.add("peek");
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(() => document.body.classList.remove("peek"), 4000);
+});
+
+let locked = false;
+$("btnLock").onclick = () => {
+  locked = !locked;
+  $("btnLock").classList.toggle("on", locked);
+  $("stage").style.pointerEvents = locked ? "none" : "";
+  $("leftcol").style.pointerEvents = "auto";
+  toast(locked ? "touch locked" : "unlocked");
+};
+
+// Cycling beats a menu here: five presets, and the operator wants to feel the
+// difference rather than read about it. The name of the one in force is always
+// on screen next to the stick that it governs.
+let ramps = ["direct", "news", "fluid", "glide", "long lens"], rampName = "fluid";
+function showRamp() { $("rampChip").textContent = rampName.toUpperCase(); }
+$("rampChip").onclick = () => {
+  rampName = ramps[(ramps.indexOf(rampName) + 1) % ramps.length];
+  showRamp();
+  post("/api/ramp", {ramp: rampName});
+  toast("ease: " + rampName);
+};
+
+$("zoomPill").onclick = () => {
+  const steps = [1,2,3,4];
+  const cur = parseFloat($("zoomVal").textContent) || 1;
+  const next = steps[(steps.indexOf(Math.round(cur)) + 1) % steps.length];
+  $("zoomVal").textContent = next.toFixed(1);
+  post("/api/camera", {set:"zoom", value:next});
+};
+
+// Punch-in: pixel magnification for checking focus, entirely separate from the
+// camera's zoom. Peaking alone is not enough at this screen size.
+let punch = 1;
+$("pic").addEventListener("dblclick", () => {
+  punch = punch === 1 ? 2 : punch === 2 ? 4 : 1;
+  $("pic").style.transform = (on.mirror ? "scaleX(-1) " : "") + `scale(${punch})`;
+  $("punch").classList.toggle("on", punch !== 1);
+  $("punch").textContent = "PUNCH " + punch + "×";
+});
+
+/* ---------------------------------------------------------------- stick */
+const stick = $("stick"), knob = $("knob");
+let held = false, tilt = 0, pan = 0, dirty = false;
+function place(ev) {
+  const r = stick.getBoundingClientRect();
+  let x = (ev.clientX - r.left) / r.width * 2 - 1;
+  let y = (ev.clientY - r.top) / r.height * 2 - 1;
+  const m = Math.hypot(x, y);
+  if (m > 1) { x /= m; y /= m; }
+  pan = x; tilt = -y; dirty = true;
+  knob.style.transform = `translate(${x*24}px, ${y*24}px)`;
+}
+stick.addEventListener("pointerdown", ev => { held = true;
+  stick.setPointerCapture(ev.pointerId); place(ev); });
+stick.addEventListener("pointermove", ev => { if (held) place(ev); });
+function release() {
+  if (!held) return;
+  held = false; tilt = pan = 0; dirty = true; knob.style.transform = "";
+}
+stick.addEventListener("pointerup", release);
+stick.addEventListener("pointercancel", release);
+stick.addEventListener("dblclick", () => { post("/api/action", {name:"recenter"});
+                                           toast("recentring"); });
+// Losing the window must stop the head. The server deadman is the backstop,
+// not the mechanism.
+window.addEventListener("blur", release);
+setInterval(() => { if (!connected || !dirty) return; dirty = held;
+                    post("/api/stick", {tilt, pan}); }, 40);
+
+// Keyboard, for the laptop case. A monitor you can only drive with a thumb is
+// half a monitor sitting on a desk during a setup.
+window.addEventListener("keydown", ev => {
+  if (ev.repeat || ev.metaKey || ev.ctrlKey) return;
+  const k = ev.key.toLowerCase();
+  if (k === "d") setDensity(density + 1);
+  else if (k === "r") $("btnRec").click();
+  else if (k === "l") $("btnLock").click();
+  else if (k === "t") $("btnTools").click();
+  else if (k === "s") document.body.classList.toggle("sun");
+  else if (k === "e") $("rampChip").click();
+  else if (k >= "1" && k <= "9") { const t = TOOLS[+k - 1]; if (t) toggle(t); }
+  else return;
+  ev.preventDefault();
+});
+</script>

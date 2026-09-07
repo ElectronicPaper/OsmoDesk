@@ -1,0 +1,32 @@
+# Headless rig controller.
+#
+# A systemd USER unit, not a system one: it needs no root, it is removed by
+# deleting one file, and it cannot take the machine down with it. Install with
+# deploy/deploy-pi.sh, which also enables lingering so it survives logout.
+#
+# Deliberately not Wants=network-online.target. The rig spends its working life
+# attached to a camera access point that has no route anywhere, and waiting for
+# "online" would hold the service down exactly when it is most needed.
+
+[Unit]
+Description=Osmo Pocket rig controller
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/osmo-rig
+# --lan so the phone and the laptop can reach it; the token still gates access.
+# No --skip flags: this is the real thing. The camera is connected from the UI
+# rather than at start-up, so the service comes up whether or not the camera is
+# switched on -- which is the normal state of a rig sitting in a case.
+ExecStart=%h/osmo-rig/.venv/bin/python %h/osmo-rig/server.py --lan --token __TOKEN__
+Restart=on-failure
+RestartSec=3
+# A crash loop should be visible, not silently retried for ever.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

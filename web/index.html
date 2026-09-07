@@ -1,0 +1,2266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0e11">
+<title>Osmo Pocket 4 Pro — Motion Control</title>
+<style>
+  :root {
+    --bg:#0b0e11; --panel:#14181d; --sunk:#0f1317; --line:#242a32;
+    --text:#e8ebef; --dim:#8a939d; --faint:#5b636d;
+    --accent:#4ea1ff; --good:#3fb950; --warn:#d29922; --bad:#f85149;
+    --rec:#ff4d4d;
+  }
+  * { box-sizing:border-box; }
+  /* Kill the double-tap zoom that otherwise fires while jogging the stick,
+     without taking pinch-zoom away from anyone who needs it. */
+  html { touch-action:manipulation; -webkit-text-size-adjust:100%; }
+  body {
+    margin:0; padding:20px; background:var(--bg); color:var(--text);
+    font:13.5px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  .wrap { max-width:1240px; margin:0 auto; }
+  header { display:flex; align-items:baseline; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+  h1 { font-size:17px; margin:0; font-weight:600; }
+  .tag { color:var(--faint); font-size:12px; }
+  /* The two views are peers, and the operator has to be able to get from one
+     to the other without knowing a URL. */
+  .tomon{
+    margin-left:auto; padding:7px 14px; border-radius:8px; text-decoration:none;
+    background:var(--accent); color:#06101d; font-weight:700; font-size:12px;
+    letter-spacing:.06em;
+  }
+  .tomon:hover{ background:#6bb2ff; }
+  .grid { display:grid; grid-template-columns:290px 1fr 300px; gap:16px; align-items:start; }
+  @media (max-width:1100px){ .grid{ grid-template-columns:1fr 1fr; } }
+  @media (max-width:720px){
+    .grid{ grid-template-columns:1fr; }
+    body{ padding:12px; }
+    /* On a phone the stick and GO are the two things you touch under
+       pressure, so they get real target area. */
+    .pad{ max-width:min(86vw,340px); }
+    button{ padding:11px 13px; font-size:14px; }
+    button.sm{ padding:8px 10px; font-size:12.5px; }
+    .pill{ padding:6px 11px; }
+    #btnGo{ min-height:60px; font-size:19px; letter-spacing:.06em; }
+  }
+  .col { display:flex; flex-direction:column; gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h2 {
+    font-size:11px; text-transform:uppercase; letter-spacing:.07em;
+    color:var(--dim); margin:0 0 11px; font-weight:600;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+
+  button {
+    background:#1c2128; color:var(--text); border:1px solid var(--line);
+    border-radius:6px; padding:7px 11px; font:inherit; font-size:12.5px;
+    cursor:pointer; transition:background .12s,border-color .12s;
+  }
+  button:hover:not(:disabled){ background:#242b34; border-color:#39424e; }
+  button:disabled{ opacity:.35; cursor:not-allowed; }
+  button.primary{ background:var(--accent); border-color:var(--accent); color:#06101d; font-weight:600; }
+  button.primary:hover:not(:disabled){ background:#6bb2ff; }
+  button.rec{ background:#3a1414; border-color:#6b2020; color:#ff9b9b; }
+  button.rec.armed{ background:var(--rec); border-color:var(--rec); color:#1a0000; font-weight:700; }
+  button.sm{ padding:4px 8px; font-size:11.5px; }
+  .row{ display:flex; gap:7px; flex-wrap:wrap; }
+  .row>*{ flex:1 1 auto; }
+
+  .dot{ width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none; }
+  .dot.connected{ background:var(--good); }
+  .dot.connecting{ background:var(--warn); animation:pulse 1s infinite; }
+  .dot.error{ background:var(--bad); }
+  @keyframes pulse{ 50%{opacity:.25} }
+  .status{ display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12.5px; }
+
+  /* joystick */
+  /* The rim IS the control. Four arc sectors on the dial edge take the nudge
+     presses, so nothing is bolted outside the circle and the whole interior
+     stays a clean drag surface. At rest they are barely there; held, the
+     sector lights and shows which way the head is going from the corner of
+     the eye. */
+  .rim{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  .sector{
+    fill:none; stroke:#222a33; stroke-width:7; stroke-linecap:round;
+    cursor:pointer; pointer-events:stroke; transition:stroke .12s;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .sector:hover{ stroke:#33404d; }
+  .sector.held{ stroke:var(--good); filter:drop-shadow(0 0 5px rgba(63,185,80,.55)); }
+  .sector.off{ stroke:#171d24; cursor:not-allowed; }
+  /* The travel warning lives on the .gauge arcs below, not on the sector
+     itself: the sector is a control surface and needs to keep reading as one
+     whatever the head is doing. */
+  .chev path{
+    fill:none; stroke:#3d4753; stroke-width:2.2;
+    stroke-linecap:round; stroke-linejoin:round; pointer-events:none;
+    transition:stroke .2s linear;
+  }
+  /* Over a lit gauge the arrow goes dark rather than taking the gauge colour.
+     Matching the amber left a mid-grey arrow sitting on mid-amber with almost
+     no contrast -- the two fought instead of reading as one indicator. */
+  .chev path.onwarn{ stroke:#120c02; stroke-width:2.6; }
+  .pad{
+    position:relative; width:100%; aspect-ratio:1; max-width:300px; margin:0 auto;
+    border-radius:50%; background:radial-gradient(circle,#191e25 0%,#101419 72%);
+    border:1px solid var(--line); touch-action:none; cursor:grab; user-select:none;
+  }
+  .pad::before,.pad::after{ content:"";position:absolute;background:var(--line); }
+  .pad::before{ left:18%;right:18%;top:50%;height:1px; }
+  .pad::after{ top:18%;bottom:18%;left:50%;width:1px; }
+  .knob{
+    position:absolute;width:20%;height:20%;border-radius:50%;
+    background:var(--accent);border:2px solid #9fccff;left:50%;top:50%;
+    transform:translate(-50%,-50%);pointer-events:none;
+    box-shadow:0 2px 12px rgba(78,161,255,.45);
+  }
+  .padnote{ text-align:center;color:var(--faint);font-size:11.5px;margin-top:8px;
+            font-family:ui-monospace,Consolas,monospace; }
+
+  /* telemetry */
+  table{ width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums; }
+  td{ padding:4px 0;border-bottom:1px solid var(--line);font-size:12.5px; }
+  td:first-child{ color:var(--dim); }
+  td:last-child{ text-align:right;font-family:ui-monospace,Consolas,monospace; }
+  tr:last-child td{ border-bottom:none; }
+
+  /* waypoints */
+  .wps{ display:flex;flex-direction:column;gap:6px;margin-bottom:10px; }
+  .wp{
+    display:grid; grid-template-columns:26px 1fr auto; gap:8px; align-items:center;
+    background:var(--sunk); border:1px solid var(--line); border-radius:7px; padding:8px;
+  }
+  .wp.active{ border-color:var(--accent); box-shadow:0 0 0 1px rgba(78,161,255,.25); }
+  .wp .idx{
+    width:24px;height:24px;border-radius:5px;background:#222932;color:var(--accent);
+    display:grid;place-items:center;font-weight:700;font-size:12px;
+  }
+  .wp .pos{ font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--dim); }
+  .wp .nm{ font-weight:600;font-size:12.5px; }
+  .wp-fields{ display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap; }
+  label.f{ display:flex;align-items:center;gap:4px;font-size:11px;color:var(--faint); }
+  input[type=number],select{
+    background:#11161b;color:var(--text);border:1px solid var(--line);
+    border-radius:5px;padding:3px 5px;font:inherit;font-size:11.5px;
+  }
+  input[type=number]{ width:56px; }
+  select{ max-width:150px; }
+  input[type=text]{
+    background:#11161b;color:var(--text);border:1px solid var(--line);
+    border-radius:5px;padding:5px 7px;font:inherit;font-size:12.5px;width:100%;
+  }
+
+  /* path map */
+  .map{ margin-top:9px; display:flex; gap:10px; align-items:flex-start; }
+  .map canvas{ background:var(--sunk); border:1px solid var(--line);
+               border-radius:8px; }
+  .map .legend{ font-size:10.5px; color:var(--faint); line-height:1.7; }
+  .map .legend b{ display:block; color:var(--dim); font-weight:600;
+                  letter-spacing:.07em; font-size:10px; margin-bottom:2px; }
+  .map .sw{ display:inline-block; width:9px; height:9px; border-radius:2px;
+            margin-right:5px; vertical-align:-1px; }
+
+  /* pre-flight */
+  .pf{ margin-top:8px; display:none; }
+  .pf.on{ display:block; }
+  .pf-sum{ font-size:11.5px; padding:6px 8px; border-radius:6px;
+           border:1px solid var(--line); background:var(--sunk); }
+  .pf-sum.ok{ color:#4ce05b; border-color:#20492a; background:#0d1a10; }
+  /* Amber, not red: the runner clamps rather than crashes, so this is a move
+     that will arrive somewhere other than authored -- constrained, not
+     broken. Red in this panel is reserved for a rig that has lost authority. */
+  .pf-sum.bad{ color:#ffb000; border-color:#6b4d09; background:#241c07; }
+  .pf-list{ margin-top:5px; display:flex; flex-direction:column; gap:3px; }
+  .pf-f{ font-size:11px; font-family:ui-monospace,Consolas,monospace;
+         color:var(--dim); padding:4px 8px; background:var(--sunk);
+         border-left:2px solid #6b4d09; border-radius:0 5px 5px 0; }
+  .pf-f.travel{ border-left-color:#ffb000; color:var(--text); }
+
+  /* between takes */
+  .btk{ margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
+  .btk-row{ display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+            margin-bottom:6px; }
+  .btk-row .t{ font-size:11px; letter-spacing:.09em; color:var(--faint);
+               min-width:74px; }
+  /* The start check is a go/no-go, so it reads as one: green when the head is
+     parked at the top of the move, amber when it is not. Not red -- nothing
+     is broken, the rig is just somewhere else. */
+  .startchk{
+    font-size:11px; font-family:ui-monospace,Consolas,monospace;
+    padding:3px 8px; border-radius:5px; border:1px solid var(--line);
+    background:var(--sunk); color:var(--faint); white-space:nowrap;
+  }
+  .startchk.ok{ color:#4ce05b; border-color:#20492a; background:#0d1a10; }
+  .startchk.off{ color:#ffb000; border-color:#6b4d09; background:#241c07; }
+
+  /* take comparison */
+  .cmp{ margin-top:8px; display:flex; gap:6px; align-items:center;
+        flex-wrap:wrap; }
+  .cmp select{ max-width:118px; }
+  .cmp-out{ margin-top:6px; font-size:11.5px; padding:6px 8px; border-radius:6px;
+            background:var(--sunk); border:1px solid var(--line);
+            color:var(--dim); display:none; }
+  .cmp-out.on{ display:block; }
+  .cmp-out b{ color:var(--text); }
+  /* Green only for a genuine match. Amber for "fixable in post", which is a
+     different answer from "fine" and must not look like it. */
+  .cmp-out.matched{ color:#4ce05b; border-color:#20492a; background:#0d1a10; }
+  .cmp-out.stab{ color:#ffb000; border-color:#6b4d09; background:#241c07; }
+  .cmp-out.no{ color:#ff6b6b; border-color:#5a2222; background:#1e0f0f; }
+
+  /* motion timelapse */
+  .lapse{ margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
+  .tl-head{ display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+  .tl-head .t{ font-size:11px; letter-spacing:.09em; color:var(--faint); }
+  .tl-fields{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .tl-sum{ margin-top:6px; font-size:11.5px; padding:6px 8px; border-radius:6px;
+           background:var(--sunk); border:1px solid var(--line); color:var(--dim); }
+  .tl-sum b{ color:var(--text); font-weight:600; }
+  .tl-warn{ margin-top:4px; font-size:11px; color:#ffb000; padding:4px 8px;
+            background:#241c07; border-left:2px solid #6b4d09;
+            border-radius:0 5px 5px 0; }
+  .tl-bar{ margin-top:6px; height:6px; border-radius:3px; background:var(--sunk);
+           border:1px solid var(--line); overflow:hidden; display:none; }
+  .tl-bar.on{ display:block; }
+  .tl-bar i{ display:block; height:100%; width:0; background:var(--accent); }
+
+  /* shot library */
+  .lib{ margin-top:9px; border-top:1px solid var(--line); padding-top:9px; }
+  .lib-head{ display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+  .lib-head .t{ font-size:11px; letter-spacing:.09em; color:var(--faint); }
+  .lib-list{ display:flex; flex-direction:column; gap:4px; max-height:172px;
+             overflow-y:auto; }
+  .lib-row{ display:grid; grid-template-columns:1fr auto auto; gap:6px;
+            align-items:center; background:var(--sunk); border:1px solid var(--line);
+            border-radius:6px; padding:6px 8px; }
+  .lib-row.cur{ border-color:var(--accent); }
+  .lib-row .n{ font-weight:600; font-size:12px; }
+  /* The rigging line is the reason a saved move is reproducible rather than
+     just repeatable: the same angles on a different tripod height are a
+     different shot. */
+  .lib-row .m{ font-size:10.5px; color:var(--faint); font-family:ui-monospace,
+               Consolas,monospace; }
+  .lib-empty{ font-size:11.5px; color:var(--faint); padding:4px 2px; }
+
+  /* timeline */
+  .tl{ position:relative;height:34px;background:var(--sunk);border:1px solid var(--line);
+       border-radius:6px;overflow:hidden;margin:10px 0 8px; }
+  .tl .fill{ position:absolute;inset:0 auto 0 0;width:0;background:rgba(78,161,255,.18);
+             border-right:2px solid var(--accent); }
+  .tl .mk{ position:absolute;top:0;bottom:0;width:2px;background:#3a434f; }
+  .tl .mk b{ position:absolute;top:3px;left:4px;font-size:10px;color:var(--faint);font-weight:600; }
+  /* A pass-through node is not a mark to hit, so it does not get a full-height
+     bar. Dashed and short reads as "the move keeps going here", which is the
+     one thing an operator needs to see at a glance when the list is long. */
+  .tl .mk.flow{ background:transparent;border-left:2px dashed #47525f;top:auto;height:11px;bottom:0; }
+  .tl .mk.flow b{ top:auto;bottom:12px;color:#5d6874; }
+
+  /* Flow toggle. Amber follows the panel's grammar for "constrained or armed"
+     -- the node is still doing something, it is just not stopping. */
+  .wp .flow-tag{
+    font-size:10px;font-weight:700;letter-spacing:.04em;border-radius:4px;
+    padding:2px 5px;border:1px solid var(--line);background:#11161b;color:var(--faint);
+    cursor:pointer;user-select:none;
+  }
+  .wp .flow-tag.on{ color:#ffb000;border-color:#6b4d09;background:#241c07; }
+  .wp .flow-tag.fixed{ cursor:default;opacity:.45; }
+  .wp .zoomrow{ display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap; }
+  .wp .zoomrow.unset select{ display:none; }
+  input.zoomv{ width:52px; }
+  .tlrow{ display:flex;justify-content:space-between;font-size:11px;color:var(--faint);
+          font-family:ui-monospace,Consolas,monospace; }
+
+  .err-badge{ font-family:ui-monospace,Consolas,monospace;font-size:11.5px; }
+  .note{ margin-top:10px;padding:8px 10px;border-radius:6px;font-size:11.5px;
+         background:#1a1408;border:1px solid #3d2f10;color:#e3c07b; }
+  .note.bad{ background:#2a1214;border-color:#5c2323;color:#ff9d96; }
+  .hidden{ display:none; }
+  .muted{ color:var(--faint);font-size:11.5px;text-align:center;padding:10px 0; }
+  .split{ display:flex;gap:8px;align-items:center; }
+  .split>span{ color:var(--dim);font-size:11.5px; }
+  .chk{ display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--dim); }
+  .bar{ display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px; }
+  .stage{ position:relative;width:100%;aspect-ratio:16/9;background:#000;
+          border:1px solid var(--line);border-radius:8px;overflow:hidden; }
+  .stage img,.stage canvas{ position:absolute;inset:0;width:100%;height:100%; }
+  .stage img{ object-fit:contain; }
+  .stage canvas{ pointer-events:none; }
+  .nofeed{ position:absolute;inset:0;display:grid;place-items:center;
+           color:var(--faint);font-size:12px; }
+  button.tgl.on{ background:var(--accent);border-color:var(--accent);
+                 color:#06101d;font-weight:600; }
+  .scopes{ display:flex;gap:8px;margin-top:9px;flex-wrap:wrap; }
+  .scope{ background:#000;border:1px solid var(--line);border-radius:6px;
+          position:relative; }
+  .scope canvas{ display:block; }
+  .scope b{ position:absolute;top:3px;left:6px;font-size:9.5px;color:var(--faint);
+            font-weight:600;letter-spacing:.05em;text-transform:uppercase; }
+  .pill{ background:var(--panel);border:1px solid var(--line);border-radius:20px;
+         padding:5px 12px;font-size:11.5px;color:var(--faint); }
+  .pill b{ color:var(--text);font-family:ui-monospace,Consolas,monospace;font-weight:600; }
+  .pill.rec{ background:#3a1414;border-color:var(--rec); }
+  .pill.rec b{ color:#ff8080; }
+  .pill.low b{ color:var(--bad); }
+  .pill.armed{ background:#3a2a08;border-color:var(--warn); }
+  .pill.armed b{ color:#ffcc55; }
+  button.go{ background:var(--good);border-color:var(--good);color:#04140a;
+             font-weight:700;animation:cuepulse 1s infinite; }
+  @keyframes cuepulse{ 50%{ filter:brightness(1.35); } }
+  .wp.cued{ border-color:var(--good); }
+  .verdict{ font-size:10px;padding:1px 5px;border-radius:3px;font-weight:600; }
+  .verdict.clean{ background:#0d2a14;color:#6ee787; }
+  .verdict.bad{ background:#2a1214;color:#ff9d96; }
+  .fgrid{ display:grid;grid-template-columns:1fr 1fr;gap:7px; }
+  label.f2{ display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--faint); }
+  label.f2 select,label.f2 input{ width:100%; }
+  input[type=range]{ width:100%;accent-color:var(--accent); }
+  .takes{ margin-top:10px;display:flex;flex-direction:column;gap:4px;
+          max-height:190px;overflow:auto; }
+  .tk{ display:flex;gap:7px;align-items:baseline;font-size:11.5px;padding:5px 7px;
+       background:var(--sunk);border:1px solid var(--line);border-radius:5px; }
+  .tk .id{ font-family:ui-monospace,Consolas,monospace;font-weight:700;color:var(--accent); }
+  .tk .nt{ color:var(--dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+  .tk .tm{ color:var(--faint);font-family:ui-monospace,Consolas,monospace;font-size:10.5px; }
+  .tk.circled{ border-color:var(--good); }
+
+  /* ---------- travel-limit gauges ----------
+     Each of the four rim sectors carries its own gauge arc, filling from the
+     middle of the sector outward as that particular stop approaches. Four
+     independent ends, four independent readouts: a single number for the whole
+     rig could only ever colour the entire control, which said "something is
+     near a limit" without saying what or which way.
+
+     Colour runs from a muted amber to a saturated red, never green -- green on
+     a camera panel means "good to shoot" everywhere else in this UI. Nothing
+     blinks: a flashing element in the corner of the eye pulls focus off the
+     subject, which is precisely the wrong trade when the operator is framing. */
+  .gauge{
+    fill:none; stroke-width:7; stroke-linecap:butt; pointer-events:none;
+    transition:stroke .2s linear, opacity .2s linear;
+    opacity:0;
+  }
+  /* ---------- full screen ----------
+     The monitor card becomes the fullscreen element, so the live view fills the
+     display and the control rides on top of it. The operator picks the corner,
+     because which part of frame may be covered depends entirely on the shot. */
+  .fsbtn{ line-height:1; padding:3px 7px; }
+  #monitorCard:fullscreen{
+    background:#000; border:0; border-radius:0; padding:0;
+    display:flex; flex-direction:column;
+  }
+  #monitorCard:fullscreen > h2,
+  #monitorCard:fullscreen > .row{ display:none; }
+  #monitorCard:fullscreen .stage{
+    flex:1 1 auto; border:0; border-radius:0; background:#000;
+  }
+  #monitorCard:fullscreen #feed{ object-fit:contain; }
+
+  .fsdock{
+    position:absolute; z-index:6; width:min(340px, 34vw);
+    /* Explicit, because the dock was resolving to 42px in the top-left corner
+       -- its own padding -- while the control card inside stayed full height
+       and rendered outside it. Sizing to content and scrolling when the frame
+       is short means no corner can ever produce a different layout from any
+       other. */
+    height:auto; max-height:calc(100% - 28px);
+    display:flex; flex-direction:column;
+    background:rgba(9,12,17,.94);
+    border:1px solid rgba(255,255,255,.11); border-radius:12px;
+    box-shadow:0 10px 34px rgba(0,0,0,.55);
+    padding:30px 10px 10px; margin:14px;
+    transition:width .18s ease, padding .18s ease;
+  }
+  .fsdock.hidden{ display:none; }
+  .fsdock.tl{ top:0; left:0; }
+  .fsdock.tr{ top:0; right:0; }
+  .fsdock.bl{ bottom:0; left:0; }
+  .fsdock.br{ bottom:0; right:0; }
+  /* Collapsed leaves the corner chips and the handle, so the operator can see
+     where it will come back and reopen it one-handed without leaving frame.
+     The explicit size is load-bearing: everything inside the collapsed tab is
+     absolutely positioned, so without it the tab collapses to its own padding
+     -- 22px of nothing, with the controls drawn outside their own container. */
+  .fsdock.collapsed{
+    width:auto; min-width:150px; min-height:46px; padding:30px 10px 10px;
+  }
+  .fsdock.collapsed #fsDockBody{ display:none; }
+  /* min-height:0 lets a flex child actually shrink; without it the body
+     refuses to scroll and pushes the dock past the bottom of the frame. */
+  #fsDockBody{ overflow-y:auto; min-height:0; }
+  .fsdock #fsDockBody > .card{
+    background:none; border:0; padding:0; margin:0; box-shadow:none;
+  }
+  .fsdock #fsDockBody .pad{ max-width:100%; }
+  .fsdock #fsDockBody h2 .fsbtn{ display:none; }
+
+  .fscorners{ position:absolute; top:6px; left:8px; display:flex; gap:3px; }
+  .fscorners button{
+    padding:1px 5px; font-size:12px; line-height:1.15; opacity:.5;
+    background:transparent; border:1px solid transparent; color:var(--dim);
+  }
+  .fscorners button:hover{ opacity:.9; }
+  .fscorners button.on{ opacity:1; color:var(--accent);
+                        border-color:rgba(78,161,255,.45); }
+  .fscollapse{
+    position:absolute; top:5px; right:7px; padding:1px 7px; font-size:12px;
+    background:transparent; border:1px solid transparent; color:var(--dim);
+  }
+  .fscollapse:hover{ color:var(--text); border-color:var(--line); }
+  /* Travel warning while the dock is collapsed. Only visible collapsed: with
+     the card open the dial itself says it far better. */
+  .fssliver{
+    position:absolute; left:8px; bottom:3px; height:3px; border-radius:2px;
+    opacity:0; display:none; transition:width .2s, background .2s, opacity .2s;
+  }
+  .fsdock.collapsed .fssliver{ display:block; }
+  .fsdock.collapsed .fscollapse{ transform:rotate(180deg); }
+
+  .fsonly{ display:none; }
+  .fsdock .fsonly{ display:flex; flex-direction:column; gap:6px; margin-top:9px; }
+  .fsrow{ display:flex; align-items:center; gap:6px; }
+  .fsrow > input[type=range]{ flex:1; }
+  .fsrow > button{ flex:1; }
+  .fslbl{ color:var(--faint); font-size:11px; min-width:38px; }
+  .fsval{ color:var(--dim); font-size:11px; font-family:ui-monospace,Consolas,monospace;
+          min-width:32px; text-align:right; }
+  button.spd.on{ background:var(--accent); border-color:var(--accent);
+                 color:#06101d; font-weight:600; }
+
+  .fshud{
+    position:absolute; top:0; left:0; right:0; z-index:5;
+    display:flex; gap:16px; justify-content:space-between;
+    padding:9px 14px; font-size:13px; letter-spacing:.4px;
+    color:#e9eef4; text-shadow:0 1px 3px #000; pointer-events:none;
+    background:linear-gradient(180deg, rgba(0,0,0,.55), rgba(0,0,0,0));
+  }
+  .fshud.hidden{ display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Osmo Pocket 4 Pro</h1>
+      <a class="tomon" href="/cine">MONITOR &rarr;</a>
+      <a class="tomon" href="/mobile">PHONE &rarr;</a>
+    <span class="tag">motion control &middot; DUML over the camera datalink</span>
+  </header>
+
+  <div class="bar" id="crew">
+    <span class="pill"><b id="cBatt">&mdash;</b> battery</span>
+    <span class="pill" id="cArmWrap"><b id="cArm">SAFE</b></span>
+    <span class="pill" id="cRecWrap"><b id="cRec">idle</b></span>
+    <span class="pill"><b id="cSlate">1A / 1</b> slate</span>
+    <span class="pill"><b id="cPitch">&mdash;</b> pitch</span>
+    <span class="pill"><b id="cYaw">&mdash;</b> yaw</span>
+    <span class="pill"><b id="cLink">&mdash;</b> link</span>
+  </div>
+
+  <div class="grid">
+    <!-- ============ left: link + live ============ -->
+    <div class="col">
+      <div class="card">
+        <h2>Link</h2>
+        <div class="status"><span class="dot" id="dot"></span><span id="state">idle</span></div>
+        <div class="row">
+          <button class="primary" id="btnConnect">Connect</button>
+          <button id="btnDisconnect" disabled>Disconnect</button>
+        </div>
+        <div class="note bad hidden" id="errBox"></div>
+      </div>
+
+      <div class="card" id="ctlCard">
+        <h2><span>Live control</span>
+          <button class="sm fsbtn" id="btnFsCtl" title="full screen with monitor">&#9974;</button>
+        </h2>
+        <div id="padSlot">
+        <div class="pad" id="pad">
+          <div class="knob" id="knob"></div>
+          <svg class="rim" viewBox="0 0 100 100" aria-hidden="false">
+            <path class="sector" data-nudge="up"    d="M 28.0 11.9 A 44 44 0 0 1 72.0 11.9"><title>tilt up</title></path>
+            <path class="sector" data-nudge="right" d="M 88.1 28.0 A 44 44 0 0 1 88.1 72.0"><title>pan right</title></path>
+            <path class="sector" data-nudge="down"  d="M 72.0 88.1 A 44 44 0 0 1 28.0 88.1"><title>tilt down</title></path>
+            <path class="sector" data-nudge="left"  d="M 11.9 72.0 A 44 44 0 0 1 11.9 28.0"><title>pan left</title></path>
+            <path class="gauge" id="gaugeUp"    pathLength="100" d="M 28.0 11.9 A 44 44 0 0 1 72.0 11.9"/>
+            <path class="gauge" id="gaugeRight" pathLength="100" d="M 88.1 28.0 A 44 44 0 0 1 88.1 72.0"/>
+            <path class="gauge" id="gaugeDown"  pathLength="100" d="M 72.0 88.1 A 44 44 0 0 1 28.0 88.1"/>
+            <path class="gauge" id="gaugeLeft"  pathLength="100" d="M 11.9 72.0 A 44 44 0 0 1 11.9 28.0"/>
+            <g class="chev">
+              <path d="M 46.6 8.4 L 50 4.8 L 53.4 8.4"/>
+              <path d="M 91.6 46.6 L 95.2 50 L 91.6 53.4"/>
+              <path d="M 53.4 91.6 L 50 95.2 L 46.6 91.6"/>
+              <path d="M 8.4 53.4 L 4.8 50 L 8.4 46.6"/>
+            </g>
+          </svg>
+        </div>
+        </div>
+        <div class="padnote" id="padnote">drag, or hold an arrow &middot; space = recenter</div>
+        <!-- Only rendered inside the full-screen dock. On the desktop layout
+             these live in their own cards; over a full-frame picture the
+             operator cannot reach them, and leaving full screen to change zoom
+             loses the shot. -->
+        <div class="fsonly" id="fsExtras">
+          <div class="fsrow">
+            <span class="fslbl">speed</span>
+            <button class="sm spd" data-speed="fine">fine</button>
+            <button class="sm spd" data-speed="normal">normal</button>
+            <button class="sm spd" data-speed="fast">fast</button>
+          </div>
+          <div class="fsrow">
+            <span class="fslbl">zoom</span>
+            <input type="range" id="fsZoom" min="1" max="4" step="0.1" value="1">
+            <span class="fsval" id="fsZoomVal">1.0&times;</span>
+          </div>
+          <div class="fsrow">
+            <!-- Arm lives in the Shot card, which is not on screen here, and
+                 it is the one control you must be able to reach instantly:
+                 nothing plays back until it is set, and it is also how you
+                 make the rig safe. Recenter is already in the row below. -->
+            <button class="sm" id="fsArm">Arm</button>
+            <button class="sm rec" id="fsRec">&#9679; Record</button>
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="sm" data-action="recenter">Recenter</button>
+          <button class="sm" data-action="flip">Flip</button>
+          <button class="sm" data-action="follow">Follow</button>
+          <button class="sm" data-action="fpv">FPV</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Exposure</h2>
+        <div class="fgrid">
+          <label class="f2">ISO<select id="selIso"></select></label>
+          <label class="f2">Shutter<select id="selShutter"></select></label>
+          <label class="f2">WB<select id="selWb"></select></label>
+          <label class="f2">Profile<select id="selColor"></select></label>
+          <label class="f2">Format<select id="selRes"></select></label>
+          <label class="f2">FPS<select id="selFps"></select></label>
+        </div>
+        <div class="row" style="margin-top:9px">
+          <label class="chk"><input type="checkbox" id="chkManual"> manual</label>
+          <label class="chk"><input type="checkbox" id="chkAfc"> AF-C</label>
+        </div>
+        <label class="f2" style="margin-top:9px">
+          Zoom <span class="tag" id="zoomVal">1.0&times;</span>
+          <input type="range" id="rngZoom" min="1" max="12" step="0.1" value="1">
+        </label>
+        <div class="note">
+          Exposure opcodes come from the community catalog and are not confirmed
+          on this body. Change one and watch the camera screen.
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Camera</h2>
+        <div class="row">
+          <button class="rec" id="btnRec">● Record</button>
+          <button class="sm" data-action="photo">Photo</button>
+        </div>
+        <label class="chk" style="margin-top:9px">
+          <input type="checkbox" id="autoRec">
+          roll camera around programmed moves
+        </label>
+        <div class="note">Record and photo are unverified on this camera. Watch the body.</div>
+      </div>
+    </div>
+
+    <!-- ============ middle: the shot ============ -->
+    <div class="col">
+      <div class="card" id="monitorCard">
+        <h2><span>Monitor</span>
+          <span><span class="err-badge" id="mStats">&mdash;</span>
+          <button class="sm fsbtn" id="btnFsMon" title="full screen">&#9974;</button></span>
+        </h2>
+        <div class="stage" id="stage">
+          <img id="feed" alt="">
+          <canvas id="assist"></canvas>
+          <canvas id="guides"></canvas>
+          <div class="nofeed" id="noFeed">waiting for live view&hellip;</div>
+          <div id="fsDock" class="fsdock hidden">
+            <div class="fscorners">
+              <button data-corner="tl" title="top left">&#9622;</button>
+              <button data-corner="tr" title="top right">&#9623;</button>
+              <button data-corner="bl" title="bottom left">&#9621;</button>
+              <button data-corner="br" title="bottom right">&#9624;</button>
+            </div>
+            <button class="fscollapse" id="btnFsCollapse" title="collapse">&#9660;</button>
+            <span class="fssliver" id="fsSliver"></span>
+            <div id="fsDockBody"></div>
+          </div>
+          <div class="fshud hidden" id="fsHud">
+            <span id="fsState">&mdash;</span><span id="fsAtt">&mdash;</span>
+          </div>
+        </div>
+        <div class="row" style="margin-top:9px">
+          <button class="sm tgl" data-assist="falsecolor">False colour</button>
+          <button class="sm tgl" data-assist="zebra">Zebras</button>
+          <button class="sm tgl" data-assist="peaking">Peaking</button>
+          <button class="sm tgl" data-assist="guides">Guides</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <button class="sm tgl" data-scope="waveform">Waveform</button>
+          <button class="sm tgl" data-scope="parade">RGB parade</button>
+          <button class="sm tgl" data-scope="histogram">Histogram</button>
+          <button class="sm tgl" data-scope="vectorscope">Vectorscope</button>
+        </div>
+        <div class="scopes" id="scopeRow"></div>
+      </div>
+
+      <div class="card">
+        <h2>
+          <span>Shot</span>
+          <span class="err-badge" id="dur">0.0s</span>
+        </h2>
+        <input type="text" id="moveName" placeholder="shot name" value="untitled">
+
+        <div class="tl" id="tl"><div class="fill" id="tlFill"></div></div>
+        <div class="tlrow"><span id="tlNow">0.00s</span><span id="tlTot">0.00s</span></div>
+
+        <div class="row" style="margin-top:10px">
+          <button id="btnArm">Arm</button>
+          <button class="go hidden" id="btnGo">GO</button>
+          <button class="primary" id="btnPlay" disabled>▶ Play</button>
+          <button class="primary" id="btnRoll" disabled title="record, count, then play">● Roll</button>
+          <button id="btnStop" disabled>■ Stop</button>
+          <button class="sm" id="btnPreflight">Pre-flight</button>
+          <button class="sm" id="btnCapture" disabled>+ Capture here</button>
+          <label class="chk" title="Capture the next node as a pass-through
+instead of a mark, so the move does not come to rest there."><input
+            type="checkbox" id="capFlow"> capture as FLOW</label>
+        </div>
+        <div class="row" style="margin-top:7px">
+          <label class="chk"><input type="checkbox" id="optLoop"> loop</label>
+          <label class="chk"><input type="checkbox" id="optPing"> ping-pong</label>
+          <span style="flex:1"></span>
+          <button class="sm" id="btnSave">Save</button>
+          <button class="sm" id="btnLoad">Load</button>
+          <button class="sm" id="btnClear">Clear</button>
+        </div>
+        <div class="btk">
+          <div class="btk-row">
+            <span class="t">BETWEEN TAKES</span>
+            <button class="sm" id="btnBackToOne">Back to one</button>
+            <button class="sm" id="btnReference" title="Shift the whole move so
+it starts from where the head is now — after a remount, a battery swap, or a
+knocked tripod.">Re-reference here</button>
+            <span class="startchk" id="startChk">—</span>
+          </div>
+          <div class="btk-row">
+            <span class="t">RETIME</span>
+            <button class="sm" data-retime="0.5">&frac12;&times;</button>
+            <button class="sm" data-retime="0.75">0.75&times;</button>
+            <button class="sm" data-retime="1.5">1.5&times;</button>
+            <button class="sm" data-retime="2">2&times;</button>
+            <label class="f">to <input type="number" id="reTotal" step="0.5"
+              min="0.5" style="width:62px" placeholder="secs">s</label>
+            <button class="sm" id="btnRetimeTo">Set</button>
+          </div>
+          <div class="btk-row">
+            <span class="t">TRIM</span>
+            <label class="f">tilt <input type="number" id="trimTilt" step="0.5"
+              value="0" style="width:58px">&deg;</label>
+            <label class="f">pan <input type="number" id="trimPan" step="0.5"
+              value="0" style="width:58px">&deg;</label>
+            <button class="sm" id="btnTrim">Apply</button>
+            <span style="flex:1"></span>
+            <label class="f">export <select id="expFmt">
+              <option value="csv">CSV</option><option value="chan">.chan</option>
+            </select></label>
+            <label class="f"><input type="number" id="expFps" step="1" min="1"
+              value="25" style="width:52px">fps</label>
+            <button class="sm" id="btnExportPath">Camera path</button>
+          </div>
+        </div>
+
+        <div class="lapse">
+          <div class="tl-head">
+            <span class="t">MOTION TIMELAPSE</span>
+            <span style="flex:1"></span>
+            <button class="sm" id="tlPlan">Cost it</button>
+            <button class="sm" id="tlStart" disabled>Start</button>
+            <button class="sm" id="tlStop" disabled>Stop</button>
+          </div>
+          <div class="tl-fields">
+            <label class="f">clip <input type="number" id="tlPlay" step="0.5"
+              min="1" value="8">s</label>
+            <label class="f">at <select id="tlFps">
+              <option>23.976</option><option>24</option>
+              <option selected>25</option><option>30</option>
+              <option>50</option><option>60</option></select>fps</label>
+            <label class="f">expose <input type="number" id="tlExpose"
+              step="0.05" min="0" value="0.5">s</label>
+            <label class="f">settle <input type="number" id="tlSettle"
+              step="0.05" min="0" value="0.35">s</label>
+            <label class="f">gap <input type="number" id="tlGap"
+              step="0.05" min="0" value="0.2">s</label>
+            <label class="f"><select id="tlMode">
+              <option value="sms">shoot-move-shoot</option>
+              <option value="continuous">continuous</option>
+            </select></label>
+          </div>
+          <div class="tl-sum" id="tlSum">Cost it before you commit an afternoon.</div>
+          <div id="tlResume"></div>
+          <div id="tlWarn"></div>
+          <div class="tl-bar" id="tlBar"><i id="lapseFill"></i></div>
+        </div>
+
+        <div class="map">
+          <canvas id="pathMap" width="188" height="188"></canvas>
+          <div class="legend">
+            <b>TRAVEL MAP</b>
+            <span class="sw" style="background:#2b3440"></span>reachable<br>
+            <span class="sw" style="background:#3a2020"></span>no travel<br>
+            <span class="sw" style="background:#4ea1ff"></span>this move<br>
+            <span class="sw" style="background:#ffb000"></span>outside<br>
+            <span class="sw" style="background:#8d969d"></span>now
+          </div>
+        </div>
+
+        <div class="pf" id="pf">
+          <div class="pf-sum" id="pfSum"></div>
+          <div class="pf-list" id="pfList"></div>
+        </div>
+        <input type="file" id="fileIn" accept=".json" class="hidden">
+
+        <div class="lib">
+          <div class="lib-head">
+            <span class="t">SHOT LIBRARY</span>
+            <span style="flex:1"></span>
+            <button class="sm" id="btnLibSave">Save to library</button>
+            <button class="sm" id="btnLibRefresh">Refresh</button>
+          </div>
+          <div class="lib-list" id="libList"></div>
+        </div>
+        <div class="note hidden" id="cueNote"></div>
+        <div class="note hidden" id="disarmNote"></div>
+        <div class="note hidden" id="clampNote">
+          Target clamped by the soft limit — the move is asking for pitch beyond
+          the mechanical stop.
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span>Setup</span><span class="tag">recreates the frame, not just the angle</span></h2>
+        <div class="fgrid">
+          <label class="f2">Mount<input type="text" id="suMount" placeholder="clamp / suction / tripod"></label>
+          <label class="f2">Height cm<input type="text" id="suHeight"></label>
+          <label class="f2">Base orientation<input type="text" id="suBase" placeholder="upright / inverted"></label>
+          <label class="f2">Route<input type="text" id="suRoute" placeholder="via +180 / direct"></label>
+          <label class="f2">Lens accessory<input type="text" id="suLens" placeholder="none / wide / macro"></label>
+          <label class="f2">ND<input type="text" id="suNd" placeholder="none / ND8"></label>
+          <label class="f2" title="Horizontal field of view in degrees. Every
+pixel figure this rig gives you — how closely two takes match — depends on it,
+and nothing on the camera reports it. Left blank, a house assumption is used
+and every result says so.">FOV&deg;<input type="text" id="suFov"
+            placeholder="84 (assumed)"></label>
+        </div>
+        <input type="text" id="suNotes" placeholder="setup notes" style="margin-top:7px">
+      </div>
+
+      <div class="card">
+        <h2><span>Waypoints</span><span class="tag" id="wpCount">0</span></h2>
+        <div class="wps" id="wps"></div>
+        <div class="muted hidden" id="wpEmpty">
+          Frame a shot with the joystick, then <b>Capture here</b>.<br>
+          Two or more waypoints make a move.
+        </div>
+        <div class="split" style="margin-top:8px">
+          <span>preset all legs</span>
+          <select id="presetSel"><option value="">—</option></select>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ right: readout ============ -->
+    <div class="col">
+      <div class="card">
+        <h2>Attitude</h2>
+        <table>
+          <tr><td>Pitch</td><td id="tPitch">—</td></tr>
+          <tr><td>Yaw</td><td id="tYaw">—</td></tr>
+          <tr><td>Tracking error</td><td id="tErr">—</td></tr>
+          <tr><td>Quaternion</td><td id="tQuat">—</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h2><span>Take log</span><button class="sm" id="btnExportData">Data</button><button class="sm" id="btnExportLog">Export</button></h2>
+        <div class="fgrid">
+          <label class="f2">Scene<input type="text" id="slScene" value="1"></label>
+          <label class="f2">Shot<input type="text" id="slShot" value="A"></label>
+          <label class="f2">Take<input type="number" id="slTake" min="1" value="1"></label>
+        </div>
+        <input type="text" id="takeNote" placeholder="note for this take" style="margin-top:8px">
+        <div class="row" style="margin-top:8px">
+          <button class="sm" id="btnLogTake">Log take</button>
+          <button class="sm" id="btnCircle">&#9678; Circle last</button>
+        </div>
+        <div id="takeList" class="takes"></div>
+        <div class="cmp">
+          <span style="font-size:11px;letter-spacing:.08em;color:var(--faint)">MATCH</span>
+          <select id="cmpA"></select>
+          <span style="color:var(--faint)">vs</span>
+          <select id="cmpB"></select>
+          <label class="f">FOV <input type="number" id="cmpFov" step="1" min="1"
+            max="180" value="84">&deg;</label>
+          <button class="sm" id="btnCompare">Compare</button>
+        </div>
+        <div class="cmp-out" id="cmpOut"></div>
+      </div>
+
+      <div class="card">
+        <h2>Session</h2>
+        <table>
+          <tr><td>SSID</td><td id="tSsid">—</td></tr>
+          <tr><td>Session</td><td id="tSession">—</td></tr>
+          <tr><td>Channel</td><td id="tChannel">—</td></tr>
+          <tr><td>Video packets</td><td id="tVideo">—</td></tr>
+          <tr><td>Pitch room</td><td id="tLimits">—</td></tr>
+          <tr><td>Yaw room</td><td id="tYawLimits">—</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let connected = false, running = false, recording = false;
+let move = { name: "untitled", loop: false, ping_pong: false, waypoints: [] };
+let lastPitch = null, lastYaw = null;
+
+async function post(path, body) {
+  const r = await fetch(path, { method:"POST",
+    headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body||{}) });
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok || j.ok === false) showError(j.error || ("HTTP " + r.status));
+  return j;
+}
+function showError(m){
+  const b = $("errBox"); b.textContent = m; b.classList.remove("hidden");
+  clearTimeout(showError.t); showError.t = setTimeout(()=>b.classList.add("hidden"), 7000);
+}
+const pushMove = async () => {
+  const r = await post("/api/move", move);
+  refreshPath();          // the map follows what the host now holds
+  return r;
+};
+
+// ---------- waypoint list ----------
+function renderWaypoints(activeIdx) {
+  const box = $("wps"); box.innerHTML = "";
+  $("wpCount").textContent = move.waypoints.length;
+  $("wpEmpty").classList.toggle("hidden", move.waypoints.length > 0);
+
+  const last = move.waypoints.length - 1;
+  move.waypoints.forEach((w, i) => {
+    // Only interior nodes can flow. The ends of a move are held at rest by the
+    // sampler whatever the flag says, so offering the toggle there would show
+    // a control that does nothing.
+    const flowable = i > 0 && i < last;
+    const el = document.createElement("div");
+    el.className = "wp" + (i === activeIdx ? " active" : "") + (w.cue ? " cued" : "");
+    el.innerHTML = `
+      <div class="idx">${String.fromCharCode(65+i)}</div>
+      <div>
+        <div class="nm">${w.name || ("wp"+(i+1))}</div>
+        <div class="pos">pitch ${w.pitch.toFixed(1)}°  yaw ${w.yaw.toFixed(1)}°</div>
+        <div class="wp-fields">
+          ${i > 0 ? `<label class="f">move <input type="number" step="0.1" min="0.1"
+              value="${w.duration}" data-i="${i}" data-k="duration">s</label>` : ""}
+          <label class="f">hold <input type="number" step="0.1" min="0"
+              value="${w.dwell}" data-i="${i}" data-k="dwell">s</label>
+          ${i > 0 ? `<label class="f"><select data-i="${i}" data-k="easing"></select></label>` : ""}
+          <label class="f"><input type="checkbox" data-i="${i}" data-k="cue"
+            ${w.cue ? "checked" : ""}> wait for GO</label>
+          ${flowable
+            ? `<span class="flow-tag ${w.flow ? 'on' : ''}" data-flow="${i}"
+                 title="A stop node comes to rest here. A flow node is passed
+through at speed, so the move does not stutter at every node.">${w.flow ? "FLOW" : "STOP"}</span>`
+            : `<span class="flow-tag fixed"
+                 title="A move has to start and end at rest to be repeatable.">STOP</span>`}
+        </div>
+        <div class="zoomrow ${w.zoom == null ? 'unset' : ''}">
+          <label class="f">zoom <input class="zoomv" type="number" step="0.05"
+            min="0" max="1" placeholder="--" value="${w.zoom == null ? '' : w.zoom}"
+            data-i="${i}" data-k="zoom"
+            title="Blank leaves the lens alone at this node."></label>
+          <select data-i="${i}" data-k="zoom_easing"></select>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <button class="sm" data-goto="${i}">Go</button>
+        ${i < last ? `<button class="sm" data-seg="${i}"
+            title="Rehearse from here to the next node. The full move is left
+alone — the next Play is still the shot.">Run&nbsp;&rarr;</button>` : ""}
+        <button class="sm" data-del="${i}">✕</button>
+      </div>`;
+    box.appendChild(el);
+
+    const sel = el.querySelector("select[data-k=easing]");
+    if (sel) {
+      EASINGS.forEach(name => {
+        const o = document.createElement("option");
+        o.value = name; o.textContent = name;
+        if (name === w.easing) o.selected = true;
+        sel.appendChild(o);
+      });
+    }
+    // Zoom carries its own easing on purpose: a push that moves with the pan
+    // is one gesture, a push that lags it and catches up is a reveal.
+    const zsel = el.querySelector("select[data-k=zoom_easing]");
+    if (zsel) {
+      EASINGS.forEach(name => {
+        const o = document.createElement("option");
+        o.value = name; o.textContent = name;
+        if (name === (w.zoom_easing || EASINGS[0])) o.selected = true;
+        zsel.appendChild(o);
+      });
+    }
+  });
+
+  box.querySelectorAll("input,select").forEach(inp => {
+    inp.onchange = () => {
+      const w = move.waypoints[+inp.dataset.i], k = inp.dataset.k;
+      if (k === "easing" || k === "zoom_easing") {
+        w[k] = inp.value;
+      } else if (k === "cue") {
+        w[k] = inp.checked;
+      } else if (k === "zoom") {
+        // Blank means "leave the lens alone here", not zero. Reading an empty
+        // field as 0 would rack the lens wide between two matched framings.
+        w.zoom = inp.value.trim() === "" ? null
+               : Math.min(1, Math.max(0, +inp.value));
+        inp.closest(".zoomrow").classList.toggle("unset", w.zoom == null);
+      } else {
+        w[k] = Math.max(k === "dwell" ? 0 : 0.1, +inp.value);
+      }
+      pushMove(); renderTimeline();
+    };
+  });
+  // "Again from node 3" is how blocking works: the difficult third of a shot
+  // runs twenty times and the easy first third once.
+  box.querySelectorAll("[data-seg]").forEach(b => {
+    b.onclick = async () => {
+      const i = +b.dataset.seg;
+      const r = await post("/api/move/segment", { first: i, last: i + 1 });
+      if (r && !r.ok && r.error) showError(r.error);
+    };
+  });
+  box.querySelectorAll("[data-flow]").forEach(t => {
+    t.onclick = () => {
+      const w = move.waypoints[+t.dataset.flow];
+      w.flow = !w.flow;
+      pushMove(); renderWaypoints(); renderTimeline();
+    };
+  });
+  box.querySelectorAll("[data-goto]").forEach(b => {
+    b.onclick = () => post("/api/goto", { index:+b.dataset.goto, duration:2.5 });
+  });
+  box.querySelectorAll("[data-del]").forEach(b => {
+    b.onclick = () => { move.waypoints.splice(+b.dataset.del,1); pushMove(); renderWaypoints(); renderTimeline(); };
+  });
+  $("btnPlay").disabled = !connected || move.waypoints.length < 2 || running;
+  $("btnRoll").disabled = $("btnPlay").disabled;
+}
+
+// ---------- timeline ----------
+function renderTimeline() {
+  pathMapDraw();
+  const tl = $("tl");
+  tl.querySelectorAll(".mk").forEach(n => n.remove());
+  const total = totalDuration();
+  $("dur").textContent = total.toFixed(1) + "s";
+  $("tlTot").textContent = total.toFixed(2) + "s";
+  if (total <= 0) return;
+  let cursor = move.waypoints.length ? move.waypoints[0].dwell : 0;
+  move.waypoints.forEach((w, i) => {
+    if (i > 0) cursor += w.duration;
+    const mk = document.createElement("div");
+    const interior = i > 0 && i < move.waypoints.length - 1;
+    mk.className = "mk" + (w.flow && interior ? " flow" : "");
+    mk.style.left = (100 * (i === 0 ? 0 : cursor / total)) + "%";
+    mk.innerHTML = `<b>${String.fromCharCode(65+i)}</b>`;
+    tl.appendChild(mk);
+    if (i > 0) cursor += w.dwell;
+  });
+}
+function totalDuration() {
+  if (move.waypoints.length < 2) return 0;
+  let t = move.waypoints[0].dwell;
+  move.waypoints.slice(1).forEach(w => { t += w.duration + w.dwell; });
+  return t;
+}
+
+// ---------- status ----------
+let EASINGS = ["ease-in-out-sine"];
+const ticks = v => (+v).toFixed(1) + "\u00d7";
+function fill(sel, items, current) {
+  sel.innerHTML = "";
+  items.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v;
+    if (String(v) === String(current)) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+async function loadPresets() {
+  try {
+    const p = await (await fetch("/api/presets")).json();
+    EASINGS = p.easings;
+    fill($("selIso"), p.iso, "auto");
+    fill($("selShutter"), p.shutter.map(d => "1/" + d), "1/50");
+    fill($("selColor"), p.color, "normal");
+    fill($("selRes"), p.resolutions, "4K");
+    fill($("selFps"), p.fps, "25");
+    fill($("selWb"), ["auto","3200","4300","5600","6500","7500"], "auto");
+    const send = (k, v) => post("/api/camera", { set:k, value:v });
+    $("selIso").onchange = e => send("iso", e.target.value);
+    $("selShutter").onchange = e => send("shutter", +e.target.value.split("/")[1]);
+    $("selColor").onchange = e => send("color", e.target.value);
+    $("selWb").onchange = e => send("wb", e.target.value);
+    $("chkManual").onchange = e => send("manual", e.target.checked);
+    $("chkAfc").onchange = e => send("focus_continuous", e.target.checked);
+    $("rngZoom").oninput = e => { $("zoomVal").textContent = ticks(e.target.value); };
+    $("rngZoom").onchange = e => {
+      send("zoom", +e.target.value);
+      $("fsZoom").value = e.target.value;
+      $("fsZoomVal").textContent = (+e.target.value).toFixed(1) + "×";
+    };
+    const res = () => post("/api/camera/resolution",
+      { resolution: $("selRes").value, fps: $("selFps").value });
+    $("selRes").onchange = res; $("selFps").onchange = res;
+    const sel = $("presetSel");
+    Object.entries(p.presets).forEach(([k,v]) => {
+      const o = document.createElement("option");
+      o.value = k; o.textContent = `${k} · ${v.duration}s`;
+      sel.appendChild(o);
+    });
+    sel.onchange = () => {
+      const k = sel.value; if (!k) return;
+      const pr = p.presets[k];
+      move.waypoints.forEach((w,i) => { if (i>0){ w.duration = pr.duration; w.easing = pr.easing; }});
+      pushMove(); renderWaypoints(); renderTimeline(); sel.value = "";
+    };
+  } catch(e){}
+}
+
+async function poll() {
+  let s;
+  try { s = await (await fetch("/api/status")).json(); } catch(e){ return; }
+  connected = s.state === "connected";
+  $("state").textContent = s.state + (s.stage ? " — " + s.stage : "");
+  $("dot").className = "dot " + s.state;
+  $("btnConnect").disabled = connected || s.state === "connecting";
+  $("btnDisconnect").disabled = !connected;
+  $("btnCapture").disabled = !connected;
+  document.querySelectorAll(".sector").forEach(b => {
+    b.classList.toggle("off", !connected || running);
+  });
+  if (s.error) showError(s.error);
+
+  const deg = v => (v==null) ? "—" : v.toFixed(1) + "°";
+  $("tPitch").textContent = deg(s.pitch);
+  $("tYaw").textContent = deg(s.yaw);
+  // The map draws the head's real travel, so it takes the geometry from the
+  // host rather than carrying its own copy of the calibration.
+  if (s.travel) travelGeom = s.travel;
+  tlProgress(s.timelapse);
+  showStartCheck(s.start_check);
+  if (!s.timelapse || !s.timelapse.running) checkResume();
+  lastPitch = s.pitch; lastYaw = s.yaw;
+  pathMapDraw();
+  $("tQuat").textContent = s.quaternion ? s.quaternion.join(", ") : "—";
+  $("tSsid").textContent = s.ssid || "—";
+  $("tSession").textContent = s.session || "—";
+  $("tChannel").textContent = s.channel || "—";
+  $("tVideo").textContent = s.video_packets ?? "—";
+  const pw = s.power;
+  $("cBatt").textContent = pw && pw.percent != null
+    ? pw.percent + "%" + (pw.charging ? " \u26a1" : "") : "\u2014";
+  $("cBatt").parentElement.classList
+    .toggle("low", !!(pw && pw.percent != null && pw.percent < 20));
+  // Two record buttons and two zoom sliders now exist -- the card ones and the
+  // full-screen ones. They must never disagree about what the camera is doing.
+  $("fsRec").classList.toggle("armed", recording);
+  $("fsRec").innerHTML = recording ? "■ Recording" : "● Record";
+  $("cRec").textContent = recording ? "REC" : "idle";
+  $("cRecWrap").classList.toggle("rec", recording);
+  $("cPitch").textContent = s.pitch == null ? "\u2014" : s.pitch.toFixed(1) + "\u00b0";
+  $("cYaw").textContent = s.yaw == null ? "\u2014" : s.yaw.toFixed(1) + "\u00b0";
+  $("cLink").textContent = connected ? "up" : s.state;
+  if (s.slate) {
+    $("cSlate").textContent = s.slate.scene + s.slate.shot + " / " + s.slate.take;
+    if (document.activeElement !== $("slTake")) $("slTake").value = s.slate.take;
+  }
+  armed = !!s.armed;
+  $("cArm").textContent = armed ? "ARMED" : "SAFE";
+  $("cArmWrap").classList.toggle("armed", armed);
+  $("btnArm").textContent = armed ? "Disarm" : "Arm";
+  // Alongside the card button, not before `armed` is refreshed above -- read
+  // any earlier and the full-screen label shows the previous poll's state.
+  $("fsArm").textContent = armed ? "Disarm" : "Arm";
+  $("fsArm").classList.toggle("primary", !armed);
+  $("btnArm").classList.toggle("primary", !armed);
+  $("disarmNote").classList.toggle("hidden", armed || !s.disarm_reason || !connected);
+  if (!armed && s.disarm_reason) $("disarmNote").textContent = "Disarmed — " + s.disarm_reason;
+  fillSetup(s.setup);
+
+  if (s.takes) renderTakes(s.takes);
+  if (typeof s.take_count === "number" && s.take_count !== lastTakeCount) {
+    lastTakeCount = s.take_count;
+    allTakes().then(fillCompareLists).catch(() => {});
+  }
+
+  const lv = s.live || {};
+  if (lv.have_frame && !feedOn) {
+    feed.src = "/api/stream";       // MJPEG; the browser keeps it open
+    feedOn = true;
+    $("noFeed").style.display = "none";
+    setTimeout(drawGuides, 300);
+  } else if (!lv.running && feedOn) {
+    feed.removeAttribute("src"); feedOn = false;
+    $("noFeed").style.display = "grid";
+  }
+  $("mStats").textContent = lv.running
+    ? `${lv.width || "?"}\u00d7${lv.height || "?"}  ${lv.fps || 0} fps` +
+      (lv.dropped_incomplete ? `  \u00b7 ${lv.dropped_incomplete} lost` : "")
+    : "no feed";
+  if (lv.running && !lv.have_frame) $("noFeed").textContent = "decoding\u2026";
+
+  if (!$("fsHud").classList.contains("hidden")) {
+    $("fsState").textContent =
+      (armed ? "ARMED" : "SAFE") + (recording ? " REC" : "") +
+      (running ? " MOVING" : "");
+    $("fsAtt").textContent =
+      (s.pitch == null ? "--" : s.pitch.toFixed(1) + "°") + "  " +
+      (s.yaw == null ? "--" : s.yaw.toFixed(1) + "°");
+  }
+
+  // ---------- travel-limit gauges ----------
+  // One gauge per direction, driven by that direction alone. The server sends
+  // 0..100 per end of each axis, already expressed as time-to-impact rather
+  // than a share of total travel -- see driver/limits.py for why that matters:
+  // resting pitch is only 28 deg from a stop, so any distance-fraction warning
+  // is lit before the operator has touched anything.
+  clutchEngaged = !!(s.clutch && s.clutch.engaged);
+  const LIM = s.limit_axes || {};
+  // Which screen direction runs into which end of the arc is a measured
+  // hardware fact, not a guess. Driving the stick UP (positive tilt) moves
+  // pitch toward the arc's LOW end -- verified by driving it there and
+  // watching the headroom -- so the up gauge is fed by pitch.low. Getting this
+  // backwards lights the opposite side of the dial from the stop being
+  // approached, which is worse than showing nothing.
+  const GAUGES = [
+    ["gaugeUp",    LIM.pitch, "low"],
+    ["gaugeDown",  LIM.pitch, "high"],
+    ["gaugeRight", LIM.yaw,   "high"],
+    ["gaugeLeft",  LIM.yaw,   "low"],
+  ];
+  const CHEVS = { gaugeUp: 0, gaugeRight: 1, gaugeDown: 2, gaugeLeft: 3 };
+  const chevPaths = document.querySelectorAll(".chev path");
+  for (const [id, axis, end] of GAUGES) {
+    const el = $(id);
+    if (!el) continue;
+    // An axis reading outside its own arc is uncalibrated -- the yaw envelope
+    // was measured with the body still. Draw nothing rather than a confident
+    // wrong number.
+    const t = (axis && axis.known) ? (axis[end] || 0) / 100 : 0;
+    const chev = chevPaths[CHEVS[id]];
+    if (t <= 0.005) {
+      el.style.opacity = 0;
+      el.style.strokeDasharray = "0 100";
+      if (chev) chev.classList.remove("onwarn");
+      continue;
+    }
+    // Segmented, not a smooth fill: discrete ticks survive daylight and a
+    // small screen, and the COUNT carries the reading independently of colour.
+    // Ten slots of 10 units each (pathLength is 100), grown from the middle of
+    // the sector outward so the pressure reads as building on that side.
+    const slots = Math.max(1, Math.round(t * 10));
+    const dash = [];
+    for (let i = 0; i < slots; i++) dash.push(7, 3);
+    el.style.strokeDasharray = dash.join(" ") + " 100";
+    el.style.strokeDashoffset = -(50 - slots * 5);
+    // Muted amber to saturated red. Never green -- green means "ready"
+    // everywhere else in this panel -- and never a blink, which would pull the
+    // eye off frame at precisely the wrong moment.
+    const col = `hsl(${Math.round(46 - 46 * t)} ${Math.round(60 + 32 * t)}% ${Math.round(56 - 6 * t)}%)`;
+    el.style.stroke = col;
+    el.style.opacity = (0.5 + 0.5 * t).toFixed(2);
+    // The direction chevron picks up the colour too, so the cue is never
+    // carried by hue alone.
+    // Dark, not tinted: an arrow the same hue as the arc behind it disappears
+    // into it exactly when the arc is trying to be noticed.
+    if (chev) chev.classList.toggle("onwarn", t > 0.35);
+  }
+  // The old whole-circle ring is gone. It fired on one number for the entire
+  // rig, so a pitch limit lit the pan sectors too.
+
+  // Collapsed in full screen, the dial is not on screen at all -- so the one
+  // state worth interrupting for would be the one state hidden. Put a sliver
+  // on the collapsed tab instead.
+  const worst = Math.max(
+    LIM.pitch && LIM.pitch.known ? Math.max(LIM.pitch.low, LIM.pitch.high) : 0,
+    LIM.yaw && LIM.yaw.known ? Math.max(LIM.yaw.low, LIM.yaw.high) : 0);
+  const sliver = $("fsSliver");
+  if (sliver) {
+    const w = worst / 100;
+    sliver.style.opacity = w <= 0.005 ? 0 : (0.55 + 0.45 * w).toFixed(2);
+    sliver.style.width = Math.round(6 + 34 * w) + "px";
+    sliver.style.background =
+      `hsl(${Math.round(46 - 46 * w)} ${Math.round(60 + 32 * w)}% ${Math.round(56 - 6 * w)}%)`;
+  }
+
+  // Live headroom beats a static description of the envelope: what an operator
+  // wants from a table is how much room is left right now, per axis.
+  const room = a => (a && a.known)
+    ? `${a.low_deg.toFixed(0)}° / ${a.high_deg.toFixed(0)}° of ${a.span.toFixed(0)}°`
+    : "uncalibrated";
+  $("tLimits").textContent = room(LIM.pitch);
+  $("tYawLimits").textContent = room(LIM.yaw);
+
+  const m = s.move;
+  if (m) {
+    running = m.running;
+    $("btnStop").disabled = !running;
+    $("btnPlay").disabled = !connected || !armed || move.waypoints.length < 2 || running;
+    $("btnRoll").disabled = $("btnPlay").disabled;
+    $("tlFill").style.width = (m.progress * 100) + "%";
+    $("tlNow").textContent = m.elapsed.toFixed(2) + "s";
+    $("tErr").textContent = running
+      ? `${m.error_pitch.toFixed(1)}° / ${m.error_yaw.toFixed(1)}°` : "—";
+    $("clampNote").classList.toggle("hidden", !m.clamped);
+
+    if (m.running && nudgeHeld) nudgeStop();
+    waitingCue = (m.waiting_cue === undefined) ? null : m.waiting_cue;
+    const atCue = waitingCue !== null && waitingCue !== undefined;
+    $("btnGo").classList.toggle("hidden", !atCue);
+    $("cueNote").classList.toggle("hidden", !atCue);
+    if (atCue) {
+      const wp = move.waypoints[waitingCue];
+      $("cueNote").textContent =
+        `Holding at ${String.fromCharCode(65 + waitingCue)}` +
+        (wp && wp.name ? ` (${wp.name})` : "") + " — press GO or Enter on the beat.";
+    }
+    if (m.report && !m.running && m.report.samples) {
+      $("tErr").textContent = m.report.verdict + " · peak " + m.report.peak_error + "°";
+    }
+  }
+}
+setInterval(poll, 300); poll(); loadPresets();
+
+// ---------- buttons ----------
+$("btnConnect").onclick = () => post("/api/connect");
+$("btnDisconnect").onclick = () => post("/api/disconnect");
+document.querySelectorAll("[data-action]").forEach(b =>
+  b.onclick = () => post("/api/action", { name: b.dataset.action }));
+
+$("btnCapture").onclick = async () => {
+  // Captured as a stop by default. Authoring by demonstration means driving to
+  // a framing and marking it, and a framing you stopped at to judge is a mark
+  // until you say otherwise -- guessing FLOW would silently change the shot.
+  const r = await post("/api/waypoint", { flow: $("capFlow").checked });
+  if (r.waypoint) { move.waypoints.push(r.waypoint); renderWaypoints(); renderTimeline(); }
+};
+$("btnRoll").onclick = async () => {
+  const r = await post("/api/move/roll", {});
+  if (r && !r.ok) alert(r.error || "could not roll");
+};
+$("btnPlay").onclick = async () => {
+  await pushMove();
+  if ($("autoRec").checked && !recording) await toggleRecord(true);
+  await post("/api/move/play");
+};
+$("btnStop").onclick = async () => {
+  await post("/api/move/stop");
+  if ($("autoRec").checked && recording) {
+    await toggleRecord(false);
+    await post("/api/take", { note: $("takeNote").value });
+    $("takeNote").value = "";
+  }
+};
+$("btnClear").onclick = () => { move.waypoints = []; pushMove(); renderWaypoints(); renderTimeline(); };
+$("moveName").onchange = e => { move.name = e.target.value || "untitled"; pushMove(); };
+$("optLoop").onchange = e => { move.loop = e.target.checked; pushMove(); };
+$("optPing").onchange = e => { move.ping_pong = e.target.checked; pushMove(); };
+
+async function toggleRecord(on) {
+  recording = on;
+  $("btnRec").classList.toggle("armed", on);
+  $("btnRec").textContent = on ? "■ Recording" : "● Record";
+  await post("/api/action", { name: on ? "record_start" : "record_stop" });
+}
+$("btnRec").onclick = () => toggleRecord(!recording);
+
+// save / load a shot as JSON
+// ---------- between takes ----------
+// The loop a set actually runs: back to one, the director asks for an
+// adjustment, the operator applies it, go again. The adjustment is almost
+// never "reprogram the move" — it is "same move, slower" or "favour her a
+// bit". Everything here exists so that request takes one click.
+async function afterMoveEdit() {
+  const s = await (await fetch("/api/status")).json();
+  move.waypoints = s.move.waypoints;
+  renderWaypoints(); renderTimeline(); refreshPath();
+}
+
+$("btnBackToOne").onclick = () => post("/api/backtoone", { duration: 2.5 });
+$("btnReference").onclick = async () => {
+  const r = await post("/api/move/reference", {});
+  if (r && r.ok) afterMoveEdit();
+};
+document.querySelectorAll("[data-retime]").forEach(b => {
+  b.onclick = async () => {
+    const r = await post("/api/move/retime", { factor: +b.dataset.retime });
+    if (r && r.ok) afterMoveEdit();
+  };
+});
+$("btnRetimeTo").onclick = async () => {
+  const total = +$("reTotal").value;
+  if (!(total > 0)) { showError("give a duration in seconds"); return; }
+  const r = await post("/api/move/retime", { total });
+  if (r && r.ok) afterMoveEdit();
+};
+$("btnTrim").onclick = async () => {
+  const r = await post("/api/move/offset",
+                       { pitch: +$("trimTilt").value || 0,
+                         yaw: +$("trimPan").value || 0 });
+  if (r && r.ok) { $("trimTilt").value = 0; $("trimPan").value = 0; afterMoveEdit(); }
+};
+
+// The bumped-tripod guard, shown continuously rather than only at play time:
+// an operator who can see they are off the mark fixes it before the director
+// calls roll, instead of after.
+function showStartCheck(chk) {
+  const el = $("startChk");
+  if (!chk || !chk.known) {
+    el.className = "startchk"; el.textContent = "start: unknown"; return;
+  }
+  if (chk.at_start) {
+    el.className = "startchk ok"; el.textContent = "at start";
+  } else {
+    el.className = "startchk off";
+    el.textContent = `off start ${chk.tilt_error >= 0 ? "+" : ""}` +
+                     `${chk.tilt_error}\u00b0 tilt, ` +
+                     `${chk.pan_error >= 0 ? "+" : ""}${chk.pan_error}\u00b0 pan`;
+  }
+}
+
+// The measured path, for post. Not the commanded path: those differ by the
+// tracking error, which is exactly what a compositor is accounting for.
+$("btnExportPath").onclick = async () => {
+  const r = await post("/api/move/export",
+                       { format: $("expFmt").value, fps: +$("expFps").value || 25 });
+  if (!r || !r.ok) { showError((r && r.error) || "nothing to export"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([r.body], { type: "text/plain" }));
+  a.download = r.name; a.click(); URL.revokeObjectURL(a.href);
+};
+
+// ---------- motion timelapse ----------
+// Step, settle, shoot, step again. An hour of real time becomes eight seconds
+// of footage, and the head appears to glide rather than creep.
+//
+// Costing is a separate button from starting on purpose. The numbers are the
+// whole value: an operator needs to see that this plan runs two hours and
+// judders at thirty frames BEFORE committing the afternoon, not after it.
+function tlBody() {
+  return {
+    playback_s: +$("tlPlay").value || 8,
+    output_fps: +$("tlFps").value || 25,
+    expose_s: +$("tlExpose").value || 0,
+    settle_s: +$("tlSettle").value || 0,
+    gap_s: +$("tlGap").value || 0,
+    mode: $("tlMode").value,
+  };
+}
+
+function tlShowPlan(plan) {
+  if (!plan) return;
+  const mins = plan.shoot_s / 60;
+  $("tlSum").innerHTML =
+    `<b>${plan.frames}</b> frames · shoot <b>` +
+    (mins >= 60 ? (mins / 60).toFixed(1) + " h" : mins.toFixed(1) + " min") +
+    `</b> · plays <b>${plan.playback_s}s</b> · <b>${plan.speed_ratio}&times;</b> ` +
+    `real time · ${plan.yaw_per_frame.toFixed(3)}&deg; yaw per frame`;
+  const box = $("tlWarn");
+  box.innerHTML = "";
+  for (const w of plan.warnings || []) {
+    const el = document.createElement("div");
+    el.className = "tl-warn";
+    el.textContent = w;
+    box.appendChild(el);
+  }
+  $("tlStart").disabled = !connected || !armed || running;
+}
+
+$("tlPlan").onclick = async () => {
+  await pushMove();
+  const r = await post("/api/timelapse/plan", tlBody());
+  if (r && r.ok) tlShowPlan(r.plan);
+};
+
+$("tlStart").onclick = async () => {
+  await pushMove();
+  const r = await post("/api/timelapse/start", tlBody());
+  if (r && r.ok) tlShowPlan(r.timelapse.plan);
+};
+
+$("tlStop").onclick = () => post("/api/timelapse/stop", {});
+
+// An interrupted shoot is OFFERED, never resumed automatically. Restarting
+// into a shoot whose scene was struck two hours ago would be worse than
+// losing it, so the operator decides.
+let tlResumeShown = "";
+async function checkResume() {
+  let r;
+  try { r = await (await fetch("/api/timelapse/resume")).json(); }
+  catch (e) { return; }
+  const box = $("tlResume");
+  const key = JSON.stringify(r);
+  if (key === tlResumeShown) return;
+  tlResumeShown = key;
+  box.innerHTML = "";
+  if (!r.available) return;
+
+  const el = document.createElement("div");
+  el.className = "tl-warn";
+  if (!r.matches) {
+    el.textContent = `An interrupted timelapse stopped at frame ${r.frame} of ` +
+      `${r.frames}, but the move has been edited since. Resuming would step ` +
+      `the head somewhere the earlier frames never went.`;
+    box.appendChild(el);
+    return;
+  }
+  el.textContent = `Interrupted at frame ${r.frame} of ${r.frames}` +
+    (r.stale ? " — over twelve hours ago, so check the scene is still up." : "") +
+    " Put the camera back on the next frame, then resume.";
+  const go = document.createElement("button");
+  go.className = "sm"; go.textContent = "Resume";
+  go.style.marginTop = "5px";
+  go.onclick = async () => {
+    const out = await post("/api/timelapse/start", { resume: true });
+    if (out && !out.ok && out.error) showError(out.error);
+    tlResumeShown = "";
+  };
+  box.appendChild(el); box.appendChild(go);
+}
+checkResume();
+
+function tlProgress(t) {
+  if (!t) return;
+  const bar = $("tlBar");
+  bar.classList.toggle("on", !!t.running);
+  $("tlStop").disabled = !t.running;
+  $("tlStart").disabled = t.running || !connected || !armed;
+  if (t.frames) {
+    $("lapseFill").style.width = (100 * t.frame / t.frames).toFixed(1) + "%";
+  }
+  if (t.running) {
+    $("tlSum").innerHTML = `shooting frame <b>${t.frame}</b> of ` +
+                           `<b>${t.frames}</b>`;
+  }
+  // An error from a run that has already ended still has to be seen: the whole
+  // failure mode of an unattended shoot is that nobody was watching.
+  if (t.error) {
+    const box = $("tlWarn");
+    if (box.dataset.err !== t.error) {
+      box.dataset.err = t.error;
+      box.innerHTML = "";
+      const el = document.createElement("div");
+      el.className = "tl-warn";
+      el.textContent = "timelapse stopped: " + t.error;
+      box.appendChild(el);
+    }
+  }
+}
+
+// ---------- travel map ----------
+// Looking down on the head. Angle is yaw, radius is how far pitch has run
+// along its own arc -- centre is one pitch stop, rim is the other.
+//
+// The point of drawing it at all: yaw has 267 degrees of travel and a 93
+// degree wedge behind the camera it simply cannot reach, and until this
+// existed there was nowhere that fact was visible. A move could be authored
+// with every node legal and a path straight through the wedge, and the only
+// symptom was the head stopping somewhere unexpected on the day.
+let travelGeom = null;               // filled from /api/status
+
+function pathMapDraw() {
+  const cv = $("pathMap");
+  if (!cv || !travelGeom) return;
+  const g = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  const cx = W / 2, cy = H / 2, R = Math.min(W, H) / 2 - 12;
+  g.clearRect(0, 0, W, H);
+
+  const yaw = travelGeom.yaw, pit = travelGeom.pitch;
+  const rad = d => (d - 90) * Math.PI / 180;     // 0 deg yaw points up
+
+  // Unreachable wedge first, so the reachable band draws over its edges.
+  g.fillStyle = "#3a2020";
+  g.beginPath(); g.moveTo(cx, cy);
+  g.arc(cx, cy, R, rad(yaw.start + yaw.span), rad(yaw.start));
+  g.closePath(); g.fill();
+
+  g.fillStyle = "#2b3440";
+  g.beginPath(); g.moveTo(cx, cy);
+  g.arc(cx, cy, R, rad(yaw.start), rad(yaw.start + yaw.span));
+  g.closePath(); g.fill();
+
+  // A ring at the centre: pitch cannot actually reach zero radius, and a path
+  // drawn into the middle would suggest it can.
+  g.strokeStyle = "#1b222b"; g.lineWidth = 1;
+  for (const f of [0.33, 0.66]) {
+    g.beginPath(); g.arc(cx, cy, R * f, 0, Math.PI * 2); g.stroke();
+  }
+
+  const place = (p, y) => {
+    // Fraction along each arc, clamped only for drawing -- a point outside is
+    // still drawn at the rim so it is visible rather than silently dropped.
+    const fy = ((y - yaw.start) % 360 + 360) % 360;
+    const fp = ((p - pit.start) % 360 + 360) % 360;
+    const inside = fy <= yaw.span && fp <= pit.span;
+    const r = 12 + (R - 12) * Math.max(0, Math.min(1, fp / pit.span));
+    return { x: cx + r * Math.cos(rad(yaw.start + Math.min(fy, yaw.span))),
+             y: cy + r * Math.sin(rad(yaw.start + Math.min(fy, yaw.span))),
+             inside };
+  };
+
+  // The move itself, sampled the way the runner will actually play it.
+  const wps = move.waypoints || [];
+  if (wps.length >= 2) {
+    let prev = null;
+    for (const s of pathPoints) {
+      const pt = place(s[0], s[1]);
+      if (prev) {
+        g.strokeStyle = (pt.inside && prev.inside) ? "#4ea1ff" : "#ffb000";
+        g.lineWidth = (pt.inside && prev.inside) ? 1.8 : 3;
+        g.beginPath(); g.moveTo(prev.x, prev.y); g.lineTo(pt.x, pt.y); g.stroke();
+      }
+      prev = pt;
+    }
+    wps.forEach((w, i) => {
+      const pt = place(w.pitch, w.yaw);
+      g.fillStyle = w.flow ? "#0b0e12" : "#4ea1ff";
+      g.strokeStyle = "#4ea1ff"; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(pt.x, pt.y, w.flow ? 3.5 : 4, 0, Math.PI * 2);
+      g.fill(); g.stroke();
+    });
+  }
+
+  // Where the head is now.
+  if (typeof lastPitch === "number" && typeof lastYaw === "number") {
+    const pt = place(lastPitch, lastYaw);
+    g.fillStyle = "#8d969d";
+    g.beginPath(); g.arc(pt.x, pt.y, 3, 0, Math.PI * 2); g.fill();
+  }
+}
+
+// The path comes from the host, sampled by the same code that will play it.
+// The first version of this map sampled the move again in JavaScript, which
+// meant a second implementation of easing, dwell handling and arc routing --
+// and the day those drift, the map draws a move that will not be played.
+let pathPoints = [];
+let pathPending = false;
+
+async function refreshPath() {
+  if (pathPending) return;
+  pathPending = true;
+  try {
+    const r = await fetch("/api/move/path").then(x => x.json());
+    pathPoints = r.points || [];
+  } catch (e) {
+    pathPoints = [];                 // draw the arcs and no path, not a lie
+  } finally {
+    pathPending = false;
+  }
+  pathMapDraw();
+}
+
+// ---------- pre-flight ----------
+// Answers "can the rig shoot this" before the take rather than after it. Three
+// things go wrong and none of them are visible while authoring: the path can
+// leave the travel arc between two legal nodes, it can demand more degrees per
+// second than the head produces, and an axis can be asked for so little that
+// its demand never clears the dead band and it does not move at all.
+//
+// It reports; it does not block. The runner already clamps pitch to the soft
+// limit, so a move outside the arc is not a crash -- it is a move that quietly
+// arrives somewhere else. A check that refused to let an operator shoot would
+// be worked around within a day.
+async function runPreflight() {
+  await pushMove();                       // judge what the host actually holds
+  let r;
+  try {
+    r = await fetch("/api/preflight").then(x => x.json());
+  } catch (e) { showError("pre-flight could not reach the host"); return; }
+
+  $("pf").classList.add("on");
+  const sum = $("pfSum"), list = $("pfList");
+  sum.classList.toggle("ok", !!r.ok);
+  sum.classList.toggle("bad", !r.ok);
+  list.innerHTML = "";
+
+  if (r.ok) {
+    sum.textContent = `Clear at ${r.speed_preset}: ${r.duration}s, peaks `
+      + `${r.peak_pitch_dps} / ${r.peak_yaw_dps} deg/s against a `
+      + `${r.max_dps} deg/s cap.`;
+    return;
+  }
+  const n = r.findings.length;
+  sum.textContent = `${n} problem${n === 1 ? "" : "s"} at ${r.speed_preset} `
+    + `(cap ${r.max_dps} deg/s). The move will still run -- pitch is clamped `
+    + `to the soft limit, so it arrives somewhere other than authored.`;
+  for (const f of r.findings) {
+    const el = document.createElement("div");
+    el.className = "pf-f " + (f.kind === "travel" ? "travel" : "");
+    el.textContent = f.detail;            // host-built string, still not markup
+    list.appendChild(el);
+  }
+}
+$("btnPreflight").onclick = runPreflight;
+
+// ---------- shot library ----------
+// Saved on the host, not in the browser: a shot list that dies with the tab
+// is not a shot list. The file Save/Load below stays as well -- that is how a
+// move gets off this machine and onto someone else's.
+async function refreshLibrary() {
+  let entries = [];
+  try {
+    entries = (await fetch("/api/moves").then(r => r.json())).moves || [];
+  } catch (e) { /* the status poll reports a dead host */ }
+  const box = $("libList");
+  box.innerHTML = "";
+  if (!entries.length) {
+    box.innerHTML = '<div class="lib-empty">nothing saved yet</div>';
+    return;
+  }
+  for (const e of entries) {
+    const row = document.createElement("div");
+    row.className = "lib-row" + (e.name === move.name ? " cur" : "");
+    const when = new Date(e.saved_at * 1000).toLocaleDateString();
+    row.innerHTML = `
+      <div>
+        <div class="n"></div>
+        <div class="m">${e.waypoints} nodes · ${e.duration}s · ${when}</div>
+        <div class="m"></div>
+      </div>
+      <button class="sm" data-lib-load="1">Load</button>
+      <button class="sm" data-lib-del="1">✕</button>`;
+    // textContent, not innerHTML: the name came from a text box, and a move
+    // called <img onerror=...> would otherwise run when the list is drawn.
+    row.querySelector(".n").textContent = e.name;
+    row.querySelectorAll(".m")[1].textContent = e.setup || "";
+    row.querySelector("[data-lib-load]").onclick = () => libLoad(e.name);
+    row.querySelector("[data-lib-del]").onclick = () => libDelete(e.name);
+    box.appendChild(row);
+  }
+}
+
+async function libSave() {
+  const name = ($("moveName").value || "").trim();
+  if (!name) { showError("give the shot a name before saving it"); return; }
+  const r = await post("/api/moves/save", { name });
+  if (r && r.ok) { await refreshLibrary(); }
+}
+
+async function libLoad(name) {
+  const r = await post("/api/moves/load", { name });
+  if (!r || !r.ok) return;
+  move = r.move;
+  $("moveName").value = move.name || "untitled";
+  $("optLoop").checked = !!move.loop;
+  $("optPing").checked = !!move.ping_pong;
+  renderWaypoints(); renderTimeline(); refreshLibrary();
+}
+
+async function libDelete(name) {
+  // Deleting a shot is not undoable and the button is a small x next to Load.
+  if (!confirm(`Delete "${name}" from the library? This cannot be undone.`)) return;
+  await post("/api/moves/delete", { name });
+  refreshLibrary();
+}
+
+$("btnLibSave").onclick = libSave;
+$("btnLibRefresh").onclick = refreshLibrary;
+refreshLibrary();
+
+$("btnSave").onclick = () => {
+  const blob = new Blob([JSON.stringify(move, null, 2)], { type:"application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (move.name || "shot").replace(/\s+/g, "-") + ".json";
+  a.click(); URL.revokeObjectURL(a.href);
+};
+$("btnLoad").onclick = () => $("fileIn").click();
+$("fileIn").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    move = JSON.parse(await f.text());
+    $("moveName").value = move.name || "untitled";
+    $("optLoop").checked = !!move.loop;
+    $("optPing").checked = !!move.ping_pong;
+    await pushMove(); renderWaypoints(); renderTimeline();
+  } catch (err) { showError("bad shot file: " + err.message); }
+  e.target.value = "";
+};
+
+// ---------- joystick ----------
+const pad = $("pad"), knob = $("knob");
+let held = false, tilt = 0, pan = 0, dirty = false;
+function setFrom(ev) {
+  const r = pad.getBoundingClientRect();
+  let dx = (ev.clientX - r.left - r.width/2) / (r.width/2);
+  let dy = (ev.clientY - r.top - r.height/2) / (r.height/2);
+  const mag = Math.hypot(dx,dy); if (mag > 1) { dx/=mag; dy/=mag; }
+  pan = dx; tilt = -dy; dirty = true;
+  knob.style.left = (50+dx*38)+"%"; knob.style.top = (50+dy*38)+"%";
+  $("padnote").textContent = `tilt ${tilt.toFixed(2)}  pan ${pan.toFixed(2)}`;
+}
+function release() {
+  if (!held) return;
+  held = false; tilt = pan = 0; dirty = true;
+  knob.style.left = knob.style.top = "50%";
+  $("padnote").textContent = "drag · arrows · space = recenter";
+}
+pad.addEventListener("pointerdown", ev => {
+  if (!connected) return showError("not connected");
+  if (running) return showError("a move is playing — stop it first");
+  held = true; pad.setPointerCapture(ev.pointerId); setFrom(ev);
+});
+pad.addEventListener("pointermove", ev => { if (held) setFrom(ev); });
+pad.addEventListener("pointerup", release);
+pad.addEventListener("pointercancel", release);
+window.addEventListener("blur", release);
+setInterval(() => {
+  if (!connected || running || !dirty) return;
+  // Keep streaming while the stick or an arrow is held; one final zero on
+  // release so the head stops rather than coasting on a stale command.
+  dirty = held || nudgeHeld !== null;
+  post("/api/stick", { tilt, pan });
+}, 40);
+
+const keys = {};
+window.addEventListener("keydown", ev => {
+  if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return;
+  if (ev.code === "Space") { post("/api/action",{name:"recenter"}); ev.preventDefault(); return; }
+  if (!ev.code.startsWith("Arrow")) return;
+  keys[ev.code] = true; applyKeys(); ev.preventDefault();
+});
+window.addEventListener("keyup", ev => {
+  if (!ev.code.startsWith("Arrow")) return;
+  delete keys[ev.code]; applyKeys();
+});
+function applyKeys() {
+  if (held || running) return;
+  pan = (keys.ArrowRight?0.6:0) - (keys.ArrowLeft?0.6:0);
+  tilt = (keys.ArrowUp?0.6:0) - (keys.ArrowDown?0.6:0);
+  dirty = true;
+  knob.style.left = (50+pan*38)+"%"; knob.style.top = (50-tilt*38)+"%";
+}
+
+// ---------- monitor: image, assists, scopes ----------
+// Everything here runs on the decoded frame in the browser. The server only
+// has to deliver JPEGs; false colour, zebras, peaking and the scopes are all
+// per-pixel work that a canvas does perfectly well at preview resolution.
+const feed = $("feed"), assistCv = $("assist"), guideCv = $("guides");
+const assists = { falsecolor:false, zebra:false, peaking:false, guides:false };
+const scopes  = { waveform:false, parade:false, histogram:false, vectorscope:false };
+let feedOn = false;
+
+document.querySelectorAll("[data-assist]").forEach(b => b.onclick = () => {
+  const k = b.dataset.assist; assists[k] = !assists[k];
+  b.classList.toggle("on", assists[k]);
+  if (k === "guides") drawGuides();
+});
+document.querySelectorAll("[data-scope]").forEach(b => b.onclick = () => {
+  const k = b.dataset.scope; scopes[k] = !scopes[k];
+  b.classList.toggle("on", scopes[k]);
+  buildScopeRow();
+});
+
+function buildScopeRow() {
+  const row = $("scopeRow"); row.innerHTML = "";
+  Object.entries(scopes).filter(([,v]) => v).forEach(([k]) => {
+    const box = document.createElement("div");
+    box.className = "scope";
+    const label = document.createElement("b"); label.textContent = k;
+    const c = document.createElement("canvas");
+    c.width = k === "vectorscope" ? 150 : 220; c.height = 130;
+    c.id = "sc_" + k;
+    box.append(c, label); row.appendChild(box);
+  });
+}
+
+// Sampling canvas: small, because assists need statistics not detail.
+const samp = document.createElement("canvas");
+const SW = 320, SH = 180;
+samp.width = SW; samp.height = SH;
+const sctx = samp.getContext("2d", { willReadFrequently:true });
+
+// False colour, IRE-banded. The point is judging exposure at a glance, so the
+// bands are coarse and the two that matter (clipping, and skin) stand out.
+function falseColour(y) {
+  if (y >= 250) return [255,0,0];        // clipped
+  if (y >= 235) return [255,150,0];      // near clip
+  if (y >= 160) return [255,255,0];      // highlights
+  if (y >= 130) return [0,255,0];        // ~ one stop over grey
+  if (y >= 100) return [190,190,190];    // 18% grey band
+  if (y >= 60)  return [0,180,255];      // shadows
+  if (y >= 20)  return [0,60,255];       // deep shadow
+  return [140,0,255];                    // crushed
+}
+
+function drawGuides() {
+  const w = guideCv.width = guideCv.clientWidth;
+  const h = guideCv.height = guideCv.clientHeight;
+  const g = guideCv.getContext("2d");
+  g.clearRect(0,0,w,h);
+  if (!assists.guides) return;
+  g.strokeStyle = "rgba(255,255,255,.35)"; g.lineWidth = 1;
+  for (let i=1;i<3;i++){                       // thirds
+    g.beginPath(); g.moveTo(w*i/3,0); g.lineTo(w*i/3,h); g.stroke();
+    g.beginPath(); g.moveTo(0,h*i/3); g.lineTo(w,h*i/3); g.stroke();
+  }
+  g.strokeStyle = "rgba(255,255,255,.5)";
+  g.strokeRect(w*0.05,h*0.05,w*0.9,h*0.9);     // 90% safe action
+  g.strokeStyle = "rgba(255,80,80,.75)";       // centre cross
+  g.beginPath(); g.moveTo(w/2-9,h/2); g.lineTo(w/2+9,h/2);
+  g.moveTo(w/2,h/2-9); g.lineTo(w/2,h/2+9); g.stroke();
+}
+
+function renderScope(name, lum, rgb) {
+  const c = document.getElementById("sc_" + name); if (!c) return;
+  const g = c.getContext("2d");
+  g.fillStyle = "#000"; g.fillRect(0,0,c.width,c.height);
+  const W = c.width, H = c.height;
+
+  if (name === "histogram") {
+    const bins = new Uint32Array(64);
+    for (let i=0;i<lum.length;i++) bins[lum[i] >> 2]++;
+    const max = Math.max(...bins) || 1;
+    g.fillStyle = "#4ea1ff";
+    for (let i=0;i<64;i++) {
+      const bh = (bins[i]/max)*(H-8);
+      g.fillRect(i*(W/64), H-bh, W/64-1, bh);
+    }
+  } else if (name === "waveform") {
+    const img = g.createImageData(W,H);
+    for (let x=0;x<W;x++){
+      const sx = Math.floor(x*SW/W);
+      for (let y=0;y<SH;y+=1){
+        const v = lum[y*SW+sx];
+        const py = H-1-Math.floor(v*(H-1)/255);
+        const o = (py*W+x)*4;
+        img.data[o]=80; img.data[o+1]=200; img.data[o+2]=120;
+        img.data[o+3]=Math.min(255,(img.data[o+3]||0)+70);
+      }
+    }
+    g.putImageData(img,0,0);
+  } else if (name === "parade") {
+    const img = g.createImageData(W,H);
+    const third = Math.floor(W/3);
+    for (let ch=0; ch<3; ch++){
+      for (let x=0;x<third;x++){
+        const sx = Math.floor(x*SW/third);
+        for (let y=0;y<SH;y++){
+          const v = rgb[(y*SW+sx)*3+ch];
+          const py = H-1-Math.floor(v*(H-1)/255);
+          const o = (py*W + ch*third + x)*4;
+          img.data[o+ch]=220;
+          img.data[o+3]=Math.min(255,(img.data[o+3]||0)+70);
+        }
+      }
+    }
+    g.putImageData(img,0,0);
+  } else if (name === "vectorscope") {
+    g.strokeStyle="#243"; g.beginPath();
+    g.arc(W/2,H/2,Math.min(W,H)/2-4,0,Math.PI*2); g.stroke();
+    g.fillStyle="rgba(120,220,255,.55)";
+    const R = Math.min(W,H)/2-4;
+    for (let i=0;i<rgb.length;i+=3*7){          // decimated: shape, not census
+      const r=rgb[i],gg=rgb[i+1],b=rgb[i+2];
+      const u=-0.169*r-0.331*gg+0.5*b, v=0.5*r-0.419*gg-0.081*b;
+      g.fillRect(W/2+(u/128)*R, H/2-(v/128)*R, 1.4, 1.4);
+    }
+  }
+}
+
+function frameLoop() {
+  requestAnimationFrame(frameLoop);
+  if (!feedOn || !feed.naturalWidth) return;
+  const anyAssist = assists.falsecolor || assists.zebra || assists.peaking;
+  const anyScope = Object.values(scopes).some(Boolean);
+  if (!anyAssist && !anyScope) {
+    if (assistCv.width) { assistCv.getContext("2d").clearRect(0,0,assistCv.width,assistCv.height); }
+    return;
+  }
+  sctx.drawImage(feed, 0, 0, SW, SH);
+  let d;
+  try { d = sctx.getImageData(0,0,SW,SH).data; } catch(e) { return; }
+
+  const lum = new Uint8Array(SW*SH);
+  const rgb = new Uint8Array(SW*SH*3);
+  for (let i=0,p=0;i<lum.length;i++,p+=4){
+    const r=d[p],gg=d[p+1],b=d[p+2];
+    rgb[i*3]=r; rgb[i*3+1]=gg; rgb[i*3+2]=b;
+    lum[i] = (0.2126*r + 0.7152*gg + 0.0722*b) | 0;
+  }
+
+  if (anyAssist) {
+    assistCv.width = SW; assistCv.height = SH;
+    const actx = assistCv.getContext("2d");
+    const out = actx.createImageData(SW,SH);
+    for (let i=0,p=0;i<lum.length;i++,p+=4){
+      const y = lum[i];
+      let r=0,g2=0,b2=0,a=0;
+      if (assists.falsecolor) { [r,g2,b2] = falseColour(y); a = 235; }
+      if (assists.zebra && y >= 235 && ((i % SW) + Math.floor(i/SW)) % 8 < 3) {
+        r=255; g2=255; b2=255; a=255;
+      }
+      out.data[p]=r; out.data[p+1]=g2; out.data[p+2]=b2; out.data[p+3]=a;
+    }
+    if (assists.peaking) {          // gradient magnitude on luma
+      for (let y=1;y<SH-1;y++) for (let x=1;x<SW-1;x++){
+        const i=y*SW+x;
+        const gx=lum[i+1]-lum[i-1], gy=lum[i+SW]-lum[i-SW];
+        if (gx*gx+gy*gy > 3200) {
+          const p2=i*4; out.data[p2]=255; out.data[p2+1]=40;
+          out.data[p2+2]=200; out.data[p2+3]=255;
+        }
+      }
+    }
+    actx.putImageData(out,0,0);
+  } else if (assistCv.width) {
+    assistCv.getContext("2d").clearRect(0,0,assistCv.width,assistCv.height);
+  }
+
+  for (const [k,v] of Object.entries(scopes)) if (v) renderScope(k, lum, rgb);
+}
+requestAnimationFrame(frameLoop);
+window.addEventListener("resize", drawGuides);
+
+// ---------- arming and cues ----------
+let armed = false, waitingCue = null;
+$("btnArm").onclick = () => post(armed ? "/api/disarm" : "/api/arm",
+                                 armed ? { reason: "operator" } : {});
+$("btnGo").onclick = () => post("/api/cue/go");
+window.addEventListener("keydown", ev => {
+  if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return;
+  if (ev.code === "Enter" && waitingCue !== null) { post("/api/cue/go"); ev.preventDefault(); }
+});
+
+// ---------- setup fingerprint ----------
+const SETUP = { suMount:"mount", suHeight:"height_cm", suBase:"base_orientation",
+                suRoute:"route", suLens:"lens_accessory", suNd:"nd_filter",
+                suFov:"fov_deg", suNotes:"notes" };
+function pushSetup() {
+  const body = {};
+  for (const [id, key] of Object.entries(SETUP)) body[key] = $(id).value;
+  post("/api/setup", body);
+}
+Object.keys(SETUP).forEach(id => $(id).onchange = pushSetup);
+function fillSetup(setup) {
+  if (!setup) return;
+  for (const [id, key] of Object.entries(SETUP)) {
+    if (document.activeElement !== $(id) && setup[key] != null) $(id).value = setup[key];
+  }
+}
+
+// ---------- nudge arrows ----------
+// Hold for a steady single-axis rate. Deliberately not a tap-to-step: a fixed
+// nudge cannot be stopped early, and on a head with ~86 deg of pan that is how
+// you overshoot. Holding is cancellable at any instant.
+const NUDGE = 0.55;
+const NUDGE_VECTORS = {
+  up:    [ NUDGE,  0],
+  down:  [-NUDGE,  0],
+  left:  [ 0, -NUDGE],
+  right: [ 0,  NUDGE],
+};
+let nudgeHeld = null;
+let clutchEngaged = false;
+
+function nudgeStart(name, el) {
+  if (!connected) { showError("not connected"); return; }
+  if (running)    { showError("a move is playing - stop it first"); return; }
+  nudgeHeld = name;
+  el.classList.add("held");
+  [tilt, pan] = NUDGE_VECTORS[name];
+  dirty = true;
+}
+function nudgeStop() {
+  if (!nudgeHeld) return;
+  nudgeHeld = null;
+  document.querySelectorAll(".sector").forEach(b => b.classList.remove("held"));
+  tilt = pan = 0;
+  dirty = true;
+}
+
+document.querySelectorAll(".sector[data-nudge]").forEach(b => {
+  const name = b.dataset.nudge;
+  b.addEventListener("pointerdown", ev => {
+    ev.preventDefault();
+    ev.stopPropagation();      // sitting inside the pad; do not start a drag
+    b.setPointerCapture(ev.pointerId);
+    nudgeStart(name, b);
+  });
+  b.addEventListener("pointerup", nudgeStop);
+  b.addEventListener("pointercancel", nudgeStop);
+  b.addEventListener("pointerleave", nudgeStop);
+  b.addEventListener("contextmenu", ev => ev.preventDefault());
+});
+// Losing the window must release, or the head keeps moving unattended.
+window.addEventListener("blur", nudgeStop);
+
+// ---------- full screen ----------
+// The pad is MOVED into the overlay rather than duplicated, so every handler,
+// the rim sectors and the drag state carry over untouched.
+const monitorCard = $("monitorCard"), fsDockBody = $("fsDockBody");
+const ctlHome = $("ctlCard").parentElement;
+const padHost = $("ctlCard");
+
+function inFullscreen() { return document.fullscreenElement === monitorCard; }
+
+async function enterFs(withControl) {
+  try { await monitorCard.requestFullscreen(); }
+  catch (e) { showError("full screen refused: " + e.message); return; }
+  $("fsDock").classList.toggle("collapsed", !withControl);
+}
+function toggleFs(withControl) {
+  if (inFullscreen()) document.exitFullscreen();
+  else enterFs(withControl);
+}
+$("btnFsMon").onclick = () => toggleFs(false);
+$("btnFsCtl").onclick = () => toggleFs(true);
+// Never collapse or redock while an input pointer is held: the control would
+// vanish mid-move with the head still running, and the operator would be left
+// hunting for a stop. The server deadman still catches it, but the UI should
+// not be the thing that creates the emergency.
+function padBusy() { return held || nudgeHeld !== null || clutchEngaged; }
+$("btnFsCollapse").onclick = () => {
+  if (padBusy()) { showError("release the control first"); return; }
+  $("fsDock").classList.toggle("collapsed");
+};
+
+// Corner placement: the operator decides which part of frame the control may
+// cover, because that depends entirely on what is being shot.
+function setCorner(c) {
+  if (padBusy()) { showError("release the control first"); return; }
+  const d = $("fsDock");
+  ["tl","tr","bl","br"].forEach(k => d.classList.toggle(k, k === c));
+  document.querySelectorAll(".fscorners button").forEach(b =>
+    b.classList.toggle("on", b.dataset.corner === c));
+  try { localStorage.setItem("osmo.fscorner", c); } catch (e) {}
+}
+document.querySelectorAll(".fscorners button").forEach(b =>
+  b.onclick = () => setCorner(b.dataset.corner));
+try { setCorner(localStorage.getItem("osmo.fscorner") || "br"); }
+catch (e) { setCorner("br"); }
+
+document.addEventListener("fullscreenchange", () => {
+  const on = inFullscreen();
+  $("fsDock").classList.toggle("hidden", !on);
+  $("fsHud").classList.toggle("hidden", !on);
+  // Relocate the live control between the card and the overlay.
+  if (on) fsDockBody.appendChild(padHost);
+  else ctlHome.appendChild(padHost);
+  drawGuides();
+});
+
+// ---------- full-screen extras ----------
+// Top speed for the stick, in the operator's terms. This is a real speed cap
+// now, not a multiplier on a deflection: the camera's own response is dead
+// below a fifth of throw and doubles at the top, so a multiplier meant
+// something different at every point of the stick.
+let speedPreset = "normal";
+function setSpeed(name) {
+  speedPreset = name;
+  document.querySelectorAll(".spd").forEach(b =>
+    b.classList.toggle("on", b.dataset.speed === name));
+  post("/api/speed", { preset: name });
+}
+document.querySelectorAll(".spd").forEach(b =>
+  b.onclick = () => setSpeed(b.dataset.speed));
+try { setSpeed(localStorage.getItem("osmo.speed") || "normal"); }
+catch (e) { setSpeed("normal"); }
+
+$("fsZoom").oninput = e => { $("fsZoomVal").textContent = (+e.target.value).toFixed(1) + "×"; };
+$("fsZoom").onchange = e => send("zoom", +e.target.value);
+$("fsArm").onclick = () => post(armed ? "/api/disarm" : "/api/arm", {});
+$("fsRec").onclick = () => toggleRecord(!recording);
+
+// ---------- take log ----------
+let lastTakesJson = "";
+// The status tail keeps the poll small; the log, the compare lists and the
+// exports are built from the full list, fetched when the count changes.
+let lastTakeCount = -1;
+async function allTakes() {
+  const j = await (await fetch("/api/takes")).json();
+  return j.takes || [];
+}
+function renderTakes(takes) {
+  const j = JSON.stringify(takes);
+  if (j === lastTakesJson) return;
+  lastTakesJson = j;
+  const box = $("takeList"); box.innerHTML = "";
+  takes.slice().reverse().forEach(t => {
+    const el = document.createElement("div");
+    el.className = "tk" + (t.circled ? " circled" : "");
+    const id = document.createElement("span");
+    id.className = "id";
+    id.textContent = t.scene + t.shot + "/" + t.take + (t.circled ? " \u25ce" : "");
+    const nt = document.createElement("span");
+    nt.className = "nt"; nt.textContent = t.note || t.move || "";
+    const tm = document.createElement("span");
+    tm.className = "tm"; tm.textContent = t.at;
+    el.append(id, nt);
+    if (t.motion && t.motion.samples) {
+      const v = document.createElement("span");
+      v.className = "verdict " + (t.motion.repeatable ? "clean" : "bad");
+      v.textContent = t.motion.verdict;
+      v.title = `peak ${t.motion.peak_error}\u00b0 \u00b7 ` +
+                `${t.motion.clamp_events} clamps \u00b7 ` +
+                `${t.motion.telemetry_gaps} telemetry gaps`;
+      el.append(v);
+    }
+    el.append(tm);
+    box.appendChild(el);
+  });
+}
+// ---------- do two takes actually match? ----------
+// The question motion control exists to answer. A plate pass and a clean pass
+// composite only if the camera was in the same place at the same instant, and
+// "it looked the same on the monitor" is not proof of anything.
+//
+// The answer is in PIXELS rather than degrees because that is what decides it:
+// half a degree is nothing on a wide shot and a broken composite on a long
+// one. The field of view is an assumption the operator can correct -- nothing
+// on this camera reports it -- so it is an editable field, not a constant.
+function fillCompareLists(takes) {
+  for (const id of ["cmpA", "cmpB"]) {
+    const sel = $(id);
+    const had = sel.value;
+    sel.innerHTML = "";
+    takes.forEach(t => {
+      const o = document.createElement("option");
+      // The take's own id, never its position: positions shift every time
+      // the list is sliced, and a shifted compare answers the wrong question.
+      o.value = t.id;
+      // Takes with no trace are listed but disabled: hiding them makes the
+      // list silently disagree with the log above it.
+      const usable = !!(t.motion && t.motion.trace && t.motion.trace.length > 1);
+      o.disabled = !usable;
+      o.textContent = `${t.scene}${t.shot}/${t.take}` + (usable ? "" : " (no trace)");
+      sel.appendChild(o);
+    });
+    if (had !== "" && takes.some(t => String(t.id) === had)) sel.value = had;
+  }
+  if (takes.length >= 2 && $("cmpA").value === $("cmpB").value) {
+    $("cmpB").value = String(takes[takes.length - 1].id);
+  }
+  $("btnCompare").disabled = takes.length < 2;
+}
+
+$("btnCompare").onclick = async () => {
+  const a = +$("cmpA").value, b = +$("cmpB").value;
+  const out = $("cmpOut");
+  out.className = "cmp-out on";
+  if (a === b) { out.textContent = "a take always matches itself"; return; }
+  const r = await post("/api/takes/compare",
+                       { first: a, second: b, fov_deg: +$("cmpFov").value || 84 });
+  if (!r || !r.ok) { out.textContent = (r && r.error) || "could not compare"; return; }
+  const c = r.comparison;
+  out.classList.add(c.verdict === "matched" ? "matched"
+                    : c.verdict === "needs stabilise" ? "stab" : "no");
+  out.innerHTML =
+    `<b>${c.verdict}</b> — ${c.takes[0]} vs ${c.takes[1]}: peak ` +
+    `<b>${c.peak_px} px</b> (${c.peak_deg}&deg;) at ${c.peak_at}s, ` +
+    `rms ${c.rms_px} px. Assumes a ${c.fov_deg}&deg; field of view across ` +
+    `${c.width_px} px — set it to your lens.`;
+};
+
+const pushSlate = () => post("/api/slate", {
+  scene: $("slScene").value, shot: $("slShot").value, take: +$("slTake").value });
+["slScene","slShot","slTake"].forEach(id => $(id).onchange = pushSlate);
+$("btnLogTake").onclick = async () => {
+  await post("/api/take", { note: $("takeNote").value });
+  $("takeNote").value = "";
+};
+$("btnCircle").onclick = () => post("/api/take/circle");
+$("btnExportLog").onclick = async () => {
+  const takes = await allTakes();
+  const rows = [["scene","shot","take","circled","move","duration","verdict",
+                 "peak_error","clamps","telemetry_gaps","setup","note","at"]]
+    .concat(takes.map(t => {
+      const m = t.motion || {};
+      return [t.scene,t.shot,t.take,t.circled?"CIRCLED":"",t.move,t.duration,
+              m.verdict||"",m.peak_error??"",m.clamp_events??"",
+              m.telemetry_gaps??"",t.setup||"",t.note,t.at];
+    }));
+  const esc = c => JSON.stringify(String(c == null ? "" : c));
+  const csv = rows.map(r => r.map(esc).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type:"text/csv" }));
+  a.download = "take-log.csv"; a.click(); URL.revokeObjectURL(a.href);
+};
+
+// A CSV is for a human reading a take log. The measured traces are camera
+// TRACKING DATA -- where the head actually was, frame by frame -- and that
+// belongs in post, not in a spreadsheet cell. Exported separately, with the
+// move and the rigging notes, so a shot can be reconstructed rather than just
+// remembered.
+$("btnExportData").onclick = async () => {
+  const s = await (await fetch("/api/status")).json();
+  const takes = await allTakes();
+  const payload = {
+    exported_at: new Date().toISOString(),
+    slate: { scene: $("slScene").value, shot: $("slShot").value },
+    move: move,
+    travel: s.travel || null,
+    // Stated, not implied: a consumer of this file needs to know the angles
+    // are gimbal telemetry in the camera's own frame, not a world frame.
+    units: { pitch: "degrees, gimbal frame", yaw: "degrees, gimbal frame",
+             trace: "[seconds, pitch, yaw] measured, decimated" },
+    takes: takes,
+  };
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(
+    new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+  a.download = ($("slScene").value || "shot") + "-data.json";
+  a.click(); URL.revokeObjectURL(a.href);
+};
+
+// ---------- the stop key ----------
+// Escape stops the rig, from anywhere, always. The one binding worth having:
+// when something is going wrong the operator's hand is not on the mouse
+// hunting for a button, and every other shortcut is a convenience while this
+// one is a brake.
+//
+// Deliberately the ONLY key bound to motion. A space bar that starts a move
+// would fire whenever the page happens to have focus, which on a rig that can
+// swing a camera is not a shortcut, it is a hazard.
+document.addEventListener("keydown", ev => {
+  if (ev.key !== "Escape") return;
+  const el = document.activeElement;
+  // Escape in a text field means "cancel what I am typing"; taking it away
+  // would be its own small trap. Blur first, then stop -- so a second press
+  // always reaches the rig.
+  if (el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) {
+    el.blur();
+    return;
+  }
+  post("/api/stop");
+  post("/api/timelapse/stop", {});
+  showError("stopped from the keyboard");
+});
+
+renderWaypoints(); renderTimeline();
+</script>
+</body>
+</html>
