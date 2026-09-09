@@ -16,6 +16,21 @@ with access to the camera network. This is a browser-based controller, not a pac
 Core2 firmware belongs exclusively to OsmoPalm. OsmoDesk does not require a Core2;
 the serial driver remains here only as an optional integration adapter.
 
+## A look at the setup
+
+![OsmoDesk laptop browser and host beside a Pocket 4P](docs/images/desktop-usage-illustration.png)
+
+Desktop: the computer runs both the Python host and the browser controls.
+
+![OsmoDesk phone browser with a computer host and Pocket 4P](docs/images/mobile-usage-illustration.png)
+
+Mobile: the phone accesses the computer host over your trusted LAN; this is not
+a standalone phone-to-camera app.
+
+These are **AI-generated usage illustrations**, not real setup photographs or
+evidence of successful operation. The screens use disconnected interface references.
+See [actual static-page captures and generation notes](docs/images/README.md).
+
 ## Run locally
 
 Python 3.10+ is required. Create and activate a virtual environment, then:
