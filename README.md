@@ -61,8 +61,16 @@ without connecting a camera. The runtime dependencies are pinned to the verified
 
 ## Status and attribution
 
-This is a private R&D source snapshot preserving existing host behavior, not a new product
+This is a public experimental preview preserving existing host behavior, not a stable product
 acceptance claim. Camera models/firmware and HEVC/browser capabilities vary. Some commands,
 especially focus, are experimental; keep evidence gates and UI caveats intact.
 Read [lessons](docs/LESSONS.md) and [third-party notices](THIRD_PARTY_NOTICES.md).
-Not affiliated with DJI. Public visibility and project licensing remain owner decisions.
+Not affiliated with DJI. Maintained by ElectronicPapers.
+
+Pocket 4P is the project's development camera; this is not certification of every
+feature or camera firmware. Pocket 3 and Pocket 4 have not been tested by us.
+Do not treat offline tests as proof of camera compatibility or safe physical motion.
+
+The source is available for inspection, but no blanket open-source license has yet
+been selected for original project code. Included third-party code retains its own
+licenses; public visibility does not replace those terms.
