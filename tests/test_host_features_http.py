@@ -8,6 +8,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 from unittest.mock import patch
 
 import server
@@ -124,6 +125,19 @@ class TestHostFeaturesHTTP(HostFeaturesHTTPBase):
         self.assertIn(f"osmo_token={crew['token']}", cookie)
         self.assertNotIn("master-fixture", cookie)
         self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assert_no_hardware()
+
+    def test_unsafe_token_cannot_inject_headers_or_cookie_attributes(self):
+        for token in ("token\r\nX-Injected: yes", "token; Path=/other", "token\x00tail", "x" * 257):
+            # Even an unsafe configured master value must not pass the HTTP
+            # boundary and be reflected. URL encoding permits a real request.
+            self.handler.token = token
+            code, _, headers = self.request("GET", "/?t=" + quote(token, safe=""),
+                                            headers={"Host": self.host})
+            self.assertEqual(code, 401)
+            self.assertNotIn("Set-Cookie", headers)
+            self.assertNotIn("X-Injected", headers)
         self.assert_no_hardware()
 
     def test_viewer_and_editor_cannot_mutate_camera_but_editor_can_author_with_cas(self):

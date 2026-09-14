@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import re
 import copy
 import hashlib
 from contextlib import nullcontext
@@ -33,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from http.cookies import CookieError, SimpleCookie
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, quote
 
 from driver import (assistant, camera, census, commands, config, crew, director, hostsettings, journal, library, lut, moves,
                     pathexport, preflight, repeatability, shutter,
@@ -2019,6 +2020,10 @@ class Handler(BaseHTTPRequestHandler):
         credential = (self.headers.get('X-Osmo-Token') if 'X-Osmo-Token' in self.headers
                       else query[0] if query else morsel.value if morsel else None)
         if credential is not None:
+            # Opaque access tokens are URL-safe, bounded ASCII. Reject header,
+            # cookie-attribute and control characters before any comparison.
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,256}", credential) is None:
+                return False
             if self.token and secrets.compare_digest(credential.encode(), self.token.encode()):
                 self._principal = dict(id='host', role='owner' if local else 'operator', allow_ai=True)
             else:
@@ -2082,9 +2087,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_response(200)
         if getattr(self, '_credential', None):
-            # Set once from ?t=, so in-page fetches need no query string.
-            self.send_header("Set-Cookie",
-                             f"osmo_token={self._credential}; Path=/; SameSite=Strict; HttpOnly")
+            # Keep the authenticated principal; never reflect a raw header or
+            # query string into Set-Cookie. Encoding is defense in depth after
+            # the strict token alphabet check at the authorization boundary.
+            cookie = SimpleCookie()
+            cookie['osmo_token'] = quote(self._credential, safe='')
+            cookie['osmo_token']['path'] = '/'
+            cookie['osmo_token']['samesite'] = 'Strict'
+            cookie['osmo_token']['httponly'] = True
+            self.send_header("Set-Cookie", cookie.output(header='').strip())
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -2744,6 +2755,9 @@ def configured_assistant(args, env: dict) -> assistant.Assistant:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.token and re.fullmatch(r"[A-Za-z0-9_-]{1,256}", args.token) is None:
+        print("access token must use 1-256 letters, digits, underscores or hyphens", file=sys.stderr)
+        return 2
     try:
         args.state_dir = state_directory(args.state_dir)
     except ValueError as exc:

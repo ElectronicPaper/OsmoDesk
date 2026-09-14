@@ -64,3 +64,9 @@ class TestStateDirectory(unittest.TestCase):
             self.assertEqual(server.main(), 2)
         load.assert_not_called()
         session.assert_not_called()
+
+    def test_cli_refuses_unsafe_master_tokens_before_loading_state(self):
+        with mock.patch("sys.argv", ["server.py", "--token", "bad; token"]), \
+             mock.patch.object(server.config, "load") as load:
+            self.assertEqual(server.main(), 2)
+        load.assert_not_called()

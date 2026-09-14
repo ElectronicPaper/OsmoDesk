@@ -1019,6 +1019,13 @@ const NEXT_ACTION = {
   review: "Log a take, then compare it against another to check the match.",
   rig: "Record the rig setup so a saved shot can be recreated later.",
 };
+const WORKSPACE_TOOLTIPS = {
+  director: "Rehearse the timing offline. Preview and proposals never move the camera.",
+  compose: "Add or edit positions, then Preview the path — nothing here moves the head.",
+  shoot: "Connect, then compose at least two points to enable motion and run or roll.",
+  review: "Log a take, then compare it against another to check the match.",
+  rig: "Record the rig setup so a saved shot can be recreated later.",
+};
 let workspace = "compose";
 function setWorkspace(name) {
   if (!WORKSPACES.includes(name)) name = "compose";
@@ -2788,7 +2795,7 @@ window.copilot=createCopilot($('directorPanel'),{
 // Register panels once after construction; arranging changes geometry only.
 const safeToArrange=()=>!held&&!armed&&!running&&!recording&&(!lastStatus?.owner||lastStatus.owner==='none');
 window.studioUI=createSurfaceUI({host:document.querySelector('header'),post,reload:()=>location.reload(),canArrange:safeToArrange});
-document.querySelectorAll('.worktab').forEach(b=>{b.prepend(OsmoUI.icon(b.dataset.work));b.title=NEXT_ACTION[b.dataset.work].replace(/<[^>]+>/g,'');});
+document.querySelectorAll('.worktab').forEach(b=>{b.prepend(OsmoUI.icon(b.dataset.work));b.title=WORKSPACE_TOOLTIPS[b.dataset.work];});
 const layouts=new Map();
 for(const name of WORKSPACES.filter(n=>n!=='director')){
   const panels=[...studioGrid.querySelectorAll(':scope > .card[data-workspace="'+name+'"]')];

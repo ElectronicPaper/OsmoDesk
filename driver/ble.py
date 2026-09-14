@@ -146,11 +146,13 @@ class OsmoBle:
                 return
             frame, used = got
             del self._rx_buf[:used]
-            log.debug("BLE <- %s", frame)
+            log.debug("BLE <- cmd=0x%02X/0x%02X bytes=%d",
+                      frame.cmd_set, frame.cmd_id, len(frame.payload))
             self._inbox.put_nowait(frame)
 
     async def send(self, frame: duml.Frame) -> None:
-        log.debug("BLE -> %s", frame)
+        log.debug("BLE -> cmd=0x%02X/0x%02X bytes=%d",
+                  frame.cmd_set, frame.cmd_id, len(frame.payload))
         await self.client.write_gatt_char(CHAR_WRITE, duml.encode(frame), response=False)
         await asyncio.sleep(WRITE_PACING_S)
 

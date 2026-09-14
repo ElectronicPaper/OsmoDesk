@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from driver import ai_provider
 from driver.assistant import (Assistant, AssistantError, MAX_CONFIRMATIONS,
-                              MAX_RESULTS)
+                              MAX_RESULTS, RESULT_TTL)
 from driver.moves import Move, Waypoint
 
 
@@ -357,8 +357,14 @@ class TestAssistantResults(unittest.TestCase):
         wait_terminal(service, job_id)
         with service._lock:
             service._jobs[job_id]["finished_at"] = 0
-        with self.assertRaisesRegex(AssistantError, "not found or expired"):
-            service.job("browser-a", job_id, "g1")
+        # Monotonic zero is a valid finish time, not a missing timestamp.
+        # Fresh CI machines may have less uptime than RESULT_TTL: never use
+        # the host's uptime as an implicit expiry fixture.
+        with patch("driver.assistant.time.monotonic", return_value=RESULT_TTL - 0.001):
+            self.assertEqual(service.job("browser-a", job_id, "g1")["state"], "completed")
+        with patch("driver.assistant.time.monotonic", return_value=RESULT_TTL):
+            with self.assertRaisesRegex(AssistantError, "not found or expired"):
+                service.job("browser-a", job_id, "g1")
         with service._lock:
             for index in range(MAX_RESULTS + 1):
                 service._jobs[f"synthetic-{index}"] = {

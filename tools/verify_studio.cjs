@@ -23,11 +23,22 @@ async function main() {
   await p.goto(base);
   await until(()=>p.locator('#saveState').textContent().then(x=>x.includes('host')), 'initial status');
   assert.equal(posts.length,0,'page load must not send control or configuration commands');
+  const expectedTooltips={
+   compose:'Add or edit positions, then Preview the path — nothing here moves the head.',
+   director:'Rehearse the timing offline. Preview and proposals never move the camera.',
+   shoot:'Connect, then compose at least two points to enable motion and run or roll.',
+   review:'Log a take, then compare it against another to check the match.',
+   rig:'Record the rig setup so a saved shot can be recreated later.'
+  };
+  const tooltips=()=>p.locator('.worktab').evaluateAll(tabs=>Object.fromEntries(tabs.map(tab=>[tab.dataset.work,tab.title])));
+  assert.deepEqual(await tooltips(),expectedTooltips,'workspace tooltips contain explicit plain text');
+  assert.equal(await p.locator('.worktab svg').count(),5,'workspace icons remain present');
+  assert.equal(await p.locator('#nextAction b').textContent(),'Preview','formatted workspace help remains intact');
   const status = () => p.request.get(base+'/api/status').then(r=>r.json());
   await p.locator('#moveName').fill('Window reveal');
   await p.locator('#moveName').press('Tab');
   for(let i=0;i<3;i++) { await p.locator('#btnAddPos').click(); await until(async()=> (await status()).move.waypoints.length===i+1,'add position'); }
-  await p.locator('[data-k="name"][data-i="0"]').fill('<b id="injected">Window</b>');
+  await p.locator('[data-k="name"][data-i="0"]').fill('<svg id="injected" onload="window.labelExecuted=true"></svg>');
   await p.locator('[data-k="name"][data-i="0"]').press('Tab');
   await p.locator('[data-work="rig"]').click();
   await p.locator('#suFov').fill('65'); await p.locator('#suFov').press('Tab');
@@ -47,6 +58,8 @@ async function main() {
   await p.locator('#shotCard details').first().locator('summary').click();
   assert.equal((await status()).move.route_arcs,false,'retime preserves route choice');
   assert.equal(await p.locator('#injected').count(),0,'operator labels must stay text');
+  assert.equal(await p.evaluate(()=>window.labelExecuted===true),false,'hostile waypoint event handler never executes');
+  assert.deepEqual(await tooltips(),expectedTooltips,'waypoint labels do not alter static tooltips');
   assert.equal(await p.locator('[data-goto]:visible,[data-seg]:visible').count(),0,'Compose cannot actuate');
   await p.locator('#previewRange').focus(); await p.keyboard.press('End');
   await until(()=>p.locator('#previewReadout').textContent().then(x=>!x.includes('0.0s')), 'keyboard preview');
@@ -66,6 +79,7 @@ async function main() {
   await p.reload(); await until(()=>p.locator('#wps .wp').count().then(n=>n===3),'reload draft');
   assert.equal(await p.locator('#moveName').inputValue(),'Window reveal');
   assert.equal(await p.locator('#injected').count(),0);
+  assert.equal(await p.evaluate(()=>window.labelExecuted===true),false,'restored hostile label never executes');
   // Use a human-readable name for the actual UI preview after the escaping check.
   await p.locator('[data-k="name"][data-i="0"]').fill('Window / start');
   await p.locator('[data-k="name"][data-i="0"]').press('Tab');
