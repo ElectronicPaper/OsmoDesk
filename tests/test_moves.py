@@ -197,6 +197,46 @@ class TestMoveTiming(unittest.TestCase):
         # Just past the end it is on the way back, not parked at the last point.
         self.assertEqual(m.sample(total + 0.5), m.sample(total - 0.5))
 
+    def test_non_loop_ping_pong_finishes_after_the_return(self):
+        m = self.build()
+        m.ping_pong = True
+        total = m.total_duration
+        self.assertFalse(m.finished(2 * total - 0.001))
+        self.assertTrue(m.finished(2 * total))
+        self.assertEqual(m.sample(2 * total + 10), m.sample(0))
+
+    def test_looped_ping_pong_keeps_repeating(self):
+        m = self.build()
+        m.ping_pong = True
+        m.loop = True
+        total = m.total_duration
+        self.assertFalse(m.finished(20 * total))
+        self.assertEqual(m.sample(2 * total + 0.25), m.sample(0.25))
+
+    def test_non_loop_ping_pong_zoom_returns_then_holds_the_start(self):
+        m = self.build()
+        m.waypoints[0].zoom = 0.2
+        m.waypoints[-1].zoom = 0.8
+        m.ping_pong = True
+        total = m.total_duration
+        self.assertEqual(m.sample_zoom(2 * total), 0.2)
+        self.assertEqual(m.sample_zoom(2 * total + 10), 0.2)
+
+    def test_ping_pong_playback_cues_cover_both_directions(self):
+        m = Move(ping_pong=True, waypoints=[
+            Waypoint("A", 90, 0, dwell=1.0, cue=True),
+            Waypoint("B", 100, 10, duration=2.0, dwell=3.0, cue=True),
+        ])
+        self.assertEqual(m.playback_cue_points(),
+                         [(0.0, 0), (3.0, 1), (6.0, 1), (11.0, 0)])
+
+    def test_turnaround_cue_is_not_presented_twice_to_the_runner(self):
+        m = Move(ping_pong=True, waypoints=[
+            Waypoint("A", 90, 0),
+            Waypoint("B", 100, 10, duration=2.0, cue=True),
+        ])
+        self.assertEqual(m.playback_cue_points(), [(2.0, 1)])
+
 
 class TestMoveSerialisation(unittest.TestCase):
     def test_roundtrip(self):
@@ -214,13 +254,53 @@ class TestMoveSerialisation(unittest.TestCase):
     def test_from_dict_applies_floors(self):
         w = Waypoint.from_dict({"name": "x", "pitch": 1, "yaw": 2,
                                 "duration": -5, "dwell": -5})
-        self.assertGreaterEqual(w.duration, 0.1)
+        self.assertEqual(w.duration, moves.MIN_LEG_S)
         self.assertEqual(w.dwell, 0.0)
 
     def test_from_dict_defaults(self):
         w = Waypoint.from_dict({"pitch": 1, "yaw": 2})
         self.assertEqual(w.easing, moves.DEFAULT_EASING)
         self.assertIn(w.easing, moves.EASINGS)
+
+    def test_minimum_leg_survives_save_reload(self):
+        m = Move(waypoints=[Waypoint("A", 90, 0),
+                            Waypoint("B", 100, 10, duration=moves.MIN_LEG_S)])
+        self.assertEqual(Move.from_json(m.to_json()).total_duration, m.total_duration)
+
+    def test_nonfinite_and_malformed_imports_fail_at_shared_boundary(self):
+        for field in ("pitch", "yaw", "duration", "dwell", "zoom"):
+            for value in (float("nan"), float("inf"), float("-inf"), True, None, []):
+                if field == "zoom" and value is None:
+                    continue
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    Waypoint.from_dict(dict(pitch=90, yaw=0, **{field: value})
+                                       if field not in ("pitch", "yaw")
+                                       else {"pitch": 90, "yaw": 0, field: value})
+        for value in ([], None, {"waypoints": {}}, {"waypoints": [None]},
+                      {"waypoints": [{}]}, {"setup": []}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                Move.from_dict(value)
+
+    def test_unknown_easing_is_not_delayed_until_playback(self):
+        for field in ("easing", "zoom_easing"):
+            with self.assertRaisesRegex(ValueError, "unknown easing"):
+                Waypoint.from_dict({"pitch": 90, "yaw": 0, field: "unknown"})
+
+    def test_angle_wrap_is_bounded_and_preserves_half_turn_direction(self):
+        import math
+        self.assertEqual(moves.wrap180(540), 180)
+        self.assertEqual(moves.wrap180(-540), -180)
+        self.assertTrue(math.isfinite(moves.wrap180(1e300)))
+        for v in (float("inf"), float("nan")):
+            with self.assertRaises(ValueError):
+                moves.wrap180(v)
+
+    def test_cue_and_dwell_nodes_have_zero_flow_tangent(self):
+        for fields in ({"cue": True}, {"dwell": 2}):
+            m = Move(waypoints=[Waypoint("A", 90, 0),
+                    Waypoint("B", 90, 10, flow=True, **fields),
+                    Waypoint("C", 90, 20)])
+            self.assertEqual(m._tangents("yaw")[1], 0)
 
 
 class TestPresets(unittest.TestCase):

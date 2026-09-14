@@ -28,7 +28,9 @@ create_archive() {
     tar --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='.pio' --exclude='*.pio/**' --exclude='*.log' --exclude='moves' \
         -czf "$archive" \
-        -C "$HERE" driver web tests deploy run.py server.py requirements.txt contracts
+        -C "$HERE" driver web tests tools deploy run.py server.py requirements.txt \
+        requirements-live.txt contracts package.json package-lock.json README.md \
+        THIRD_PARTY_NOTICES.md LICENSES RELEASE_NOTES.md
 }
 
 if [ "${1:-}" = "--package-only" ]; then
@@ -116,6 +118,16 @@ rollback_activation() {
 }
 trap 'rollback_activation $?' ERR
 
+# Validate before staging or seeding anything. In particular, mkdir/cp follow
+# parent symlinks; rejecting only after migration is already too late.
+state_ancestor="$PERSISTENT_MOVES"
+while :; do
+    [ ! -L "$state_ancestor" ] \
+        || { echo "persistent state cannot contain symbolic links" >&2; exit 1; }
+    [ "$state_ancestor" = / ] && break
+    state_ancestor="$(dirname -- "$state_ancestor")"
+done
+
 mkdir -p "$RELEASES_DIR"
 if [ "$PREVIOUS_RELEASE" = "$RELEASE_DIR" ]; then
     echo "release already active: $RELEASE_ID"
@@ -140,12 +152,9 @@ if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE/moves" ] \
     && [ "$(readlink -f "$PREVIOUS_RELEASE/moves")" != "$PERSISTENT_MOVES" ]; then
     cp -a -n "$PREVIOUS_RELEASE/moves/." "$PERSISTENT_MOVES/"
 fi
-if [ -e "$RELEASE_DIR/moves" ] || [ -L "$RELEASE_DIR/moves" ]; then
-    [ "$(readlink -f "$RELEASE_DIR/moves")" = "$PERSISTENT_MOVES" ] \
-        || { echo "refusing to replace release-local moves" >&2; exit 1; }
-else
-    ln -s "$PERSISTENT_MOVES" "$RELEASE_DIR/moves"
-fi
+# New releases use --state-dir directly. Do not create a symlink that the
+# journal and secret-storage guards would correctly reject. Existing release
+# links remain untouched for rollback and the seeding step above.
 
 python3 -m venv .venv
 ./.venv/bin/pip install -q --upgrade pip
@@ -153,7 +162,7 @@ python3 -m venv .venv
 
 # Prove it before installing it. A service that starts and then fails its own
 # tests is worse than one that never started.
-./.venv/bin/python -m unittest discover -s tests -q 2>&1 | tail -3
+./.venv/bin/python -B -m unittest discover -s tests -t . -q 2>&1 | tail -3
 # A reused content-addressed release was prepared earlier; record this
 # activation so it remains among the newest rollback candidates later.
 touch -m "$RELEASE_DIR"

@@ -22,3 +22,7 @@ moves/
 .remember/
 session-log.md
 *.code-workspace
+
+# AI assistant artifacts
+context-snapshot.json
+.claude/state/

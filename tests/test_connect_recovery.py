@@ -29,6 +29,28 @@ from unittest import mock
 from bleak.exc import BleakCharacteristicNotFoundError
 
 from driver import ble as ble_mod
+from driver import duml
+
+
+class TestBleSecretLogging(unittest.IsolatedAsyncioTestCase):
+    async def test_send_and_receive_log_only_metadata_not_credentials(self):
+        device = SimpleNamespace(address="AA:BB:CC:DD:EE:FF", name="fixture")
+        with mock.patch.object(ble_mod, "BleakClient"):
+            link = ble_mod.OsmoBle(device)
+        link.client.write_gatt_char = mock.AsyncMock()
+        secret = b"synthetic-wifi-password"
+        frame = duml.Frame(2, 7, 1, 0x40, 7, 0x0E, secret)
+        with self.assertLogs(ble_mod.log, level="DEBUG") as logs, \
+             mock.patch.object(ble_mod.asyncio, "sleep", new=mock.AsyncMock()):
+            await link.send(frame)
+            link._on_notify(None, bytearray(duml.encode(frame)))
+        output = "\n".join(logs.output)
+        self.assertIn("cmd=0x07/0x0E", output)
+        self.assertIn("bytes=23", output)
+        self.assertNotIn(secret.decode(), output)
+        self.assertNotIn(secret.hex(" "), output)
+        self.assertNotIn("payload=", output)
+        self.assertEqual(link._inbox.get_nowait().payload, secret)
 
 
 class TestStaleGattCacheRecovery(unittest.IsolatedAsyncioTestCase):

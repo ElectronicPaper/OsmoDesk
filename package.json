@@ -1,0 +1,7 @@
+{
+  "name": "osmodesk-workspace-assets",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {"build:layout": "esbuild web/snapgrid-entry.js --bundle --minify --format=iife --global-name=OsmoSnapgrid --outfile=web/vendor/snapgrid.js --legal-comments=eof"},
+  "devDependencies": {"@snapgridjs/core": "0.10.0", "esbuild": "0.25.12"}
+}

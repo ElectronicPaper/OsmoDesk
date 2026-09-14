@@ -8,6 +8,7 @@ move.
 """
 
 import unittest
+from unittest.mock import patch
 
 from driver import limits, moves, preflight, response
 from driver.moves import Move, Waypoint
@@ -44,7 +45,7 @@ class TestAMoveTheRigCanDo(unittest.TestCase):
                                pitch_at(.6), yaw_at(.6), duration=20.0))
         self.assertGreater(r.peak_yaw_dps, 0.0)
         self.assertLess(r.peak_yaw_dps, response.MAX_DPS)
-        self.assertIn("within the rig", r.summary())
+        self.assertIn("within sampled planning limits", r.summary())
 
     def test_an_empty_move_is_not_a_failure(self):
         self.assertTrue(check(Move()).ok)
@@ -142,6 +143,22 @@ class TestSpeed(unittest.TestCase):
         self.assertFalse(capped.ok)
         self.assertTrue(any(f.kind == "too fast" for f in capped.findings))
 
+    def test_a_fifty_millisecond_leg_is_not_silently_under_sampled(self):
+        r = check(move_between(pitch_at(.5), yaw_at(.3),
+                               pitch_at(.5), yaw_at(.7), duration=0.05))
+        self.assertTrue(any(f.kind == "too fast" for f in r.findings),
+                        r.summary())
+
+    def test_a_short_leg_after_a_long_dwell_is_still_inspected(self):
+        p, y = pitch_at(.5), yaw_at(.3)
+        move = Move(waypoints=[
+            Waypoint("hold", p, y, dwell=50_000.0),
+            Waypoint("snap", p, yaw_at(.7), duration=0.05),
+        ])
+        r = check(move)
+        self.assertTrue(any(f.kind == "too fast" for f in r.findings),
+                        r.summary())
+
 
 class TestDeadBand(unittest.TestCase):
     def test_an_axis_that_never_clears_the_band_is_caught(self):
@@ -216,6 +233,53 @@ class TestSerialisation(unittest.TestCase):
         self.assertIn("findings", d)
         self.assertIn("detail", d["findings"][0])
         self.assertIsInstance(d["duration"], float)
+
+
+class TestBoundedSampling(unittest.TestCase):
+    def test_invalid_canonical_sample_cannot_return_a_passing_check(self):
+        move = move_between(pitch_at(.4), yaw_at(.4), pitch_at(.6), yaw_at(.6))
+        for point in (None, (float('nan'), 0), (0, float('inf'))):
+            with self.subTest(point=point), patch.object(move, 'sample', return_value=point):
+                r = check(move)
+                self.assertFalse(r.ok)
+                self.assertTrue(any(f.kind == 'assessment' for f in r.findings))
+
+    def test_brief_eased_peak_cannot_be_hidden_by_violation_aggregation(self):
+        move = move_between(pitch_at(.5), yaw_at(.5),
+                            pitch_at(.5), yaw_at(.5) + 1, duration=.05)
+        r = check(move, max_dps=25)
+        self.assertGreater(r.peak_yaw_dps, 25)
+        self.assertFalse(r.ok)
+        self.assertTrue(any(f.kind == 'too fast' for f in r.findings))
+
+    def test_huge_duration_has_a_hard_sample_cap(self):
+        move = move_between(pitch_at(.4), yaw_at(.4),
+                            pitch_at(.6), yaw_at(.6), duration=10_000_000.0)
+        r = check(move)
+        self.assertLessEqual(r.samples, preflight.MAX_SAMPLES)
+
+    def test_an_unassessably_large_waypoint_list_fails_closed(self):
+        move = Move(waypoints=[
+            Waypoint(str(i), pitch_at(.5), yaw_at(.5), duration=0.05)
+            for i in range(preflight.MAX_WAYPOINTS + 1)
+        ])
+        r = check(move)
+        self.assertFalse(r.ok)
+        self.assertTrue(any(f.kind == "assessment" for f in r.findings))
+
+    def test_late_short_travel_jump_is_seen_within_the_budget(self):
+        waypoints = [
+            Waypoint(str(i), pitch_at(.5), yaw_at(.05),
+                     duration=.05, dwell=10_000.0)
+            for i in range(preflight.MAX_WAYPOINTS - 1)
+        ]
+        waypoints.append(Waypoint("jump", pitch_at(.5), yaw_at(.95),
+                                  duration=.05))
+        move = Move(route_arcs=False, waypoints=waypoints)
+        r = check(move)
+        self.assertLessEqual(r.samples, preflight.MAX_SAMPLES)
+        self.assertTrue(any(f.kind == "travel" and f.axis == "yaw"
+                            for f in r.findings), r.summary())
 
 
 if __name__ == "__main__":

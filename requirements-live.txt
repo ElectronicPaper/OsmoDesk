@@ -1,0 +1,4 @@
+# Optional HEVC preview profile. Requires Python >=3.11; core control stays optional.
+# Install: python -m pip install --only-binary=:all: -r requirements-live.txt
+-r requirements.txt
+av==18.1.0

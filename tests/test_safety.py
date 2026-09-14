@@ -241,7 +241,9 @@ class TestMotionValidity(unittest.TestCase):
 
     def test_take_log_carries_the_report(self):
         s = session()
+        s._start_shot_run()
         s.runner.report.note(0.2, 0.2, False, True)
+        s.runner.running = False
         e = s.log_take("wide")
         self.assertIsNotNone(e["motion"])
         self.assertEqual(e["motion"]["verdict"], "clean")

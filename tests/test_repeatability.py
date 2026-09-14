@@ -5,6 +5,7 @@ answer wrongly: a plate pass and a clean pass composite only if the camera was
 in the same place at the same instant, and "it looked the same" is not proof.
 """
 
+import math
 import unittest
 
 from driver import repeatability
@@ -110,6 +111,62 @@ class TestTimingRatherThanIndexing(unittest.TestCase):
         short = trace(60)
         c = compare(full, short)
         self.assertLess(c.peak_deg, 0.3, c.summary())
+        self.assertEqual(c.verdict, "partial comparison")
+        self.assertFalse(c.compositable)
+        self.assertLess(c.coverage_a, 0.95)
+        self.assertLess(c.coverage_b, 0.95)
+
+    def test_complete_expected_durations_are_quality_checked(self):
+        c = compare(trace(101, step=0.01), trace(101, step=0.01),
+                    duration_a=1.0, duration_b=1.0)
+        self.assertEqual(c.verdict, "matched")
+        self.assertAlmostEqual(c.overlap_seconds, 1.0)
+        self.assertAlmostEqual(c.coverage_a, 1.0)
+        self.assertAlmostEqual(c.coverage_b, 1.0)
+
+    def test_missing_the_start_of_an_expected_take_is_partial(self):
+        late = trace(95, t0=0.06, step=0.01)
+        c = compare(trace(101, step=0.01), late,
+                    duration_a=1.0, duration_b=1.0)
+        self.assertEqual(c.verdict, "partial comparison")
+        self.assertFalse(c.compositable)
+        self.assertIn("take B coverage is below 95%", c.quality_reasons)
+
+    def test_short_overlap_cannot_make_a_whole_shot_claim(self):
+        c = compare(trace(3, step=0.1), trace(3, step=0.1))
+        self.assertEqual(c.verdict, "partial comparison")
+        self.assertIn("overlap is shorter than 0.25 seconds", c.quality_reasons)
+
+    def test_an_aborted_take_is_partial_but_keeps_metrics(self):
+        dpp = degrees_per_pixel()
+        c = compare(trace(200), trace(200, drift_yaw=dpp * 2.0),
+                    aborted_b=True)
+        self.assertEqual(c.verdict, "partial comparison")
+        self.assertGreater(c.peak_px, 1.0)
+        self.assertIn("take B was aborted", c.quality_reasons)
+
+    def test_a_large_gap_relative_to_cadence_is_partial(self):
+        regular = [(0.0, 100.0, 0.0), (0.1, 100.0, 1.0),
+                   (0.2, 100.0, 2.0), (0.3, 100.0, 3.0),
+                   (1.3, 100.0, 13.0), (1.4, 100.0, 14.0)]
+        c = compare(regular, list(regular))
+        self.assertEqual(c.verdict, "partial comparison")
+        self.assertIn("take A has an unusually large interpolation gap",
+                      c.quality_reasons)
+        self.assertAlmostEqual(c.max_gap_a_seconds, 1.0)
+
+    def test_evenly_decimated_long_traces_are_not_rejected_for_cadence(self):
+        decimated = trace(20, step=10.0)
+        c = compare(decimated, list(decimated))
+        self.assertEqual(c.verdict, "matched")
+        self.assertAlmostEqual(c.max_gap_a_seconds, 10.0)
+
+    def test_evidence_scope_does_not_claim_a_real_composite(self):
+        d = compare(trace(20), trace(20)).to_dict()
+        self.assertIn("angular", d["evidence_scope"])
+        self.assertIn("not proof", d["evidence_scope"])
+        self.assertIn("quality_reasons", d)
+        self.assertIn("overlap_seconds", d)
 
 
 class TestRefusals(unittest.TestCase):
@@ -120,6 +177,60 @@ class TestRefusals(unittest.TestCase):
     def test_a_single_point(self):
         with self.assertRaises(RepeatabilityError):
             compare(trace(1), trace(50))
+
+    def test_malformed_points_are_not_silently_filtered(self):
+        malformed = [(0.0, 1.0, 2.0), (0.1, 1.0)]
+        with self.assertRaises(RepeatabilityError):
+            compare(malformed, trace(50))
+
+    def test_points_must_be_exact_numeric_triples(self):
+        bad_points = [
+            [(0.0, 1.0, 2.0), (0.1, 1.0, 2.0, 3.0)],
+            [(0.0, 1.0, 2.0), (0.1, True, 2.0)],
+            [(0.0, 1.0, 2.0), (0.1, "1", 2.0)],
+            [(0.0, 1.0, 2.0), (0.1, math.inf, 2.0)],
+            [(0.0, 1.0, 2.0), (0.1, 1.0, math.nan)],
+        ]
+        for points in bad_points:
+            with self.subTest(points=points), self.assertRaises(RepeatabilityError):
+                compare(points, trace(50))
+
+    def test_times_are_nonnegative_and_strictly_increasing(self):
+        bad_traces = [
+            [(-0.1, 1.0, 2.0), (0.1, 1.0, 2.0)],
+            [(0.0, 1.0, 2.0), (0.0, 1.0, 2.0)],
+            [(0.1, 1.0, 2.0), (0.0, 1.0, 2.0)],
+        ]
+        for points in bad_traces:
+            with self.subTest(points=points), self.assertRaises(RepeatabilityError):
+                compare(points, trace(50))
+
+    def test_trace_and_requested_sample_sizes_are_bounded(self):
+        too_large = [(i * 0.01, 1.0, 2.0)
+                     for i in range(repeatability.MAX_TRACE_POINTS + 1)]
+        with self.assertRaises(RepeatabilityError):
+            compare(too_large, trace(50))
+        with self.assertRaises(RepeatabilityError):
+            compare(trace(50), trace(50),
+                    samples=repeatability.MAX_COMPARISON_SAMPLES + 1)
+
+    def test_samples_must_be_an_integer_in_range(self):
+        for value in (True, 1, 2.5):
+            with self.subTest(value=value), self.assertRaises(RepeatabilityError):
+                compare(trace(50), trace(50), samples=value)
+
+    def test_lens_inputs_are_finite_and_sensible(self):
+        for fov in (True, math.nan, math.inf, 0.0, 180.0):
+            with self.subTest(fov=fov), self.assertRaises(RepeatabilityError):
+                compare(trace(50), trace(50), fov_deg=fov)
+        for width in (True, 0, 1920.0, repeatability.MAX_WIDTH_PX + 1):
+            with self.subTest(width=width), self.assertRaises(RepeatabilityError):
+                compare(trace(50), trace(50), width_px=width)
+
+    def test_optional_durations_must_be_positive_finite_numbers(self):
+        for duration in (True, 0.0, -1.0, math.nan, math.inf):
+            with self.subTest(duration=duration), self.assertRaises(RepeatabilityError):
+                compare(trace(50), trace(50), duration_a=duration)
 
 
 class TestTheTraceItself(unittest.TestCase):

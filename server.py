@@ -14,21 +14,29 @@ localhost driver.
 from __future__ import annotations
 
 import argparse
+import sys
+import re
+import copy
+import hashlib
+from contextlib import nullcontext
+from functools import wraps
 import asyncio
 import ipaddress
 import secrets
 import socket
 import json
+import math
 import logging
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from http.cookies import CookieError, SimpleCookie
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, quote
 
-from driver import (camera, census, commands, config, library, lut, moves,
+from driver import (assistant, camera, census, commands, config, crew, director, hostsettings, journal, library, lut, moves,
                     pathexport, preflight, repeatability, shutter,
                     timelapse, transport, wifi)
 from driver.datalink import Datalink
@@ -40,6 +48,7 @@ from driver import response, shaping
 from driver.core2 import Core2Link
 from driver import moves
 from run import obtain_credentials
+from driver.ai_provider import OpenAIProvider, ProviderError
 
 log = logging.getLogger("panel")
 
@@ -48,10 +57,35 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 # survive a reboot is not a shot library.
 MOVES_DIR = Path(__file__).resolve().parent / "moves"
 
+
+def state_directory(value: Path | str) -> Path:
+    """An explicit physical directory, never an implicit symlink traversal."""
+    root = Path(value)
+    if not root.is_absolute() or ".." in root.parts:
+        raise ValueError("state directory must be an absolute path without parent traversal")
+    for part in (root, *root.parents):
+        if part.is_symlink():
+            raise ValueError("state directory cannot contain symbolic links")
+        try:
+            if getattr(part.lstat(), "st_reparse_tag", 0):
+                raise ValueError("state directory cannot contain reparse points")
+        except FileNotFoundError:
+            pass
+    if root.exists() and not root.is_dir():
+        raise ValueError("state directory must be a directory")
+    return root
+
 # How often rig state is pushed to the Core2. This thread competes with the
 # HEVC decoder for the GIL, and preview is the thing that suffers.
 CORE2_FEED_PERIOD_S = 0.25
 MAX_JSON_BODY_BYTES = 64 * 1024
+BROWSER_LEASE_S = 0.5
+WORKSPACE_ROUTES = frozenset({
+    "/api/move", "/api/move/retime", "/api/move/offset", "/api/move/reference",
+    "/api/moves/save", "/api/moves/load", "/api/moves/delete", "/api/waypoint",
+    "/api/setup", "/api/slate", "/api/take", "/api/take/circle",
+    "/api/workspace/recovery",
+})
 
 
 def _step10(v: int) -> int:
@@ -72,11 +106,35 @@ def _strict_bool(value, setting: str) -> bool:
     return value
 
 
+def _workspace_change(method):
+    """Serialize authoring changes and persist only non-actuating session data."""
+    @wraps(method)
+    def changed(self, *args, **kwargs):
+        with self._workspace_lock:
+            result = method(self, *args, **kwargs)
+            self._workspace_revision += 1
+            self._persist_workspace()
+            return result
+    return changed
+
+
+def _motion_change(method):
+    @wraps(method)
+    def changed(self, *args, **kwargs):
+        with self._motion_lock:
+            return method(self, *args, **kwargs)
+    return changed
+
+
 class CameraSession:
     """Owns the camera connection and the stick pump for the whole process."""
 
-    def __init__(self, args):
+    def __init__(self, args, workspace_root: Path | None = None):
         self.args = args
+        self.state_dir = state_directory(workspace_root if workspace_root is not None else MOVES_DIR)
+        # Explicit injection at startup; constructing a session never reads a
+        # provider key or enables paid requests (including in offline tests).
+        self.assistant = assistant.Assistant()
         self.link: Datalink | None = None
         self.stick: GimbalStick | None = None
         self.state = "idle"
@@ -84,7 +142,7 @@ class CameraSession:
         self.error: str | None = None
         self.ssid: str | None = None
         self.move = moves.Move(name="untitled")
-        self.library = library.Library(MOVES_DIR)
+        self.library = library.Library(self.state_dir)
         # Passive observer on the inbound frames. The driver subscribes to five
         # camera status streams and decodes none of them, which is the reason
         # the monitor cannot prove the camera is recording. This is how those
@@ -142,35 +200,135 @@ class CameraSession:
         self.takes: list[dict] = []
         self.slate = {"scene": "1", "shot": "A", "take": 1}
         self._lock = threading.Lock()
+        self._connect_generation = 0
+        self._connect_active = False
+        self._workspace_lock = threading.RLock()
+        self._workspace_epoch = secrets.token_hex(8)
+        self._workspace_revision = 0
+        self._motion_lock = threading.RLock()
+        self._browser_client = None
+        self._browser_until = 0.0
+        self._browser_timer = None
+        self._browser_packets = {}
+        self._manual_until = 0.0
+        self.journal = journal.WorkspaceJournal(self.state_dir) if workspace_root is not None else None
+        self.crew = crew.CrewAccess()
+        self.host_settings = (hostsettings.HostSettings(self.state_dir, hostsettings.WinCredVault())
+                              if workspace_root is not None else None)
+        self.workspace_warning = None
+        self._shot_run = None
+        self._logged_run_id = None
+        if self.journal is not None:
+            restored = self.journal.load()
+            self.workspace_warning = self.journal.warning
+            if restored is not None:
+                self.move = moves.Move.from_dict(restored["draft"])
+                self.slate = restored["slate"]
+                self.takes = restored["takes"]
+
+    def _persist_workspace(self) -> None:
+        if self.journal is None:
+            return
+        try:
+            self.journal.save(draft=self.move.to_dict(), slate=self.slate, takes=self.takes)
+            self.workspace_warning = self.journal.warning
+        except (ValueError, RuntimeError, OSError) as exc:
+            # Work can continue and be exported, but never label it durable.
+            self.workspace_warning = f"Workspace not saved: {exc}"
+            log.warning(self.workspace_warning)
+
+    def workspace_info(self) -> dict:
+        return {"enabled": self.journal is not None,
+                "revision": self.journal.revision if self.journal else 0,
+                "generation": f"{self._workspace_epoch}:{self._workspace_revision}",
+                "durable": bool(self.journal and self.journal.revision > 0
+                                and not self.workspace_warning),
+                "warning": self.workspace_warning}
+
+    def recover_workspace(self, body):
+        """Local explicit recovery never connects, commands or restores authority."""
+        if self.journal is None:
+            raise ValueError('This host has no workspace journal')
+        if body.get('confirm') is not True:
+            raise ValueError('Confirm recovery after reviewing the current and backup files')
+        with self._workspace_lock, self._motion_lock:
+            if self.owner != 'none' or self.recording or self.armed:
+                raise ValueError('Release controls and disable motion before recovering the workspace')
+            snapshot = self.journal.recover(body.get('action'),
+                expected_fingerprint=body.get('fingerprint'), draft=self.move.to_dict(),
+                slate=self.slate, takes=self.takes)
+            self.move = moves.Move.from_dict(snapshot['draft'])
+            self.slate, self.takes = snapshot['slate'], snapshot['takes']
+            self._workspace_revision += 1
+            self.workspace_warning = self.journal.warning
+            self._shot_run = self._logged_run_id = None
+            return {'ok': True, 'message': 'Recovered. Original files are preserved as recovery copies.'}
+
+    def update_ai_settings(self, body):
+        if self.host_settings is None:
+            raise ValueError('Host settings storage is unavailable')
+        def update():
+            prefs = self.host_settings.update(body)
+            provider = OpenAIProvider(self.host_settings.provider_key()) if prefs['enabled'] else None
+            self.args.ai_lan = prefs['allow_lan']
+            return provider, prefs['budget_usd'], prefs['request_limit']
+        self.assistant.configure(update)
+        return self.host_settings.public()
+
+    def revoke_crew(self, ident):
+        # Revoke under the admission lock before taking the motion lock; every
+        # crew mutation takes these locks in that order.
+        self.crew.revoke(ident)
+        self.assistant.revoke_clients('crew:' + ident + ':')
+        with self._motion_lock:
+            if (self._browser_client or '').startswith('crew:' + ident + ':'):
+                self._browser_until = 0
+                self._expire_browser()
 
     # -- lifecycle ----------------------------------------------------------
 
     def connect(self) -> None:
         with self._lock:
-            if self.state in ("connecting", "connected"):
+            if self._connect_active and self.state != "connecting":
+                raise RuntimeError("previous connection is still stopping; wait for cleanup before reconnecting")
+            if self._connect_active or self.state in ("connecting", "connected"):
                 return
+            self._connect_generation += 1
+            generation = self._connect_generation
+            self._connect_active = True
             self.state = "connecting"
             self.stage = "starting"
             self.error = None
-        threading.Thread(target=self._connect_worker, daemon=True).start()
+        threading.Thread(target=self._connect_worker, args=(generation,), daemon=True).start()
 
-    def _connect_worker(self) -> None:
+    def _connect_worker(self, generation: int | None = None) -> None:
         # BaseException, not Exception: obtain_credentials raises SystemExit
         # when no camera is found, which would otherwise kill this thread
         # silently and leave the UI stuck on "connecting" forever.
         self.armed = False
         self.disarm_reason = "connecting -- arm before playing a move"
+        generation = self._connect_generation if generation is None else generation
+        link = stick = live = None
+        adopted = False
+
+        def current():
+            if generation != self._connect_generation:
+                raise RuntimeError("connection cancelled")
+
         try:
+            current()
             ssid, password = self.args.ssid, self.args.password
             if not self.args.skip_ble:
                 # BLE also sends the 0x53/0x10 AP wake; the SoftAP sleeps
                 # whenever no client holds it.
                 self.stage = "pairing over BLE"
                 ssid, password = asyncio.run(obtain_credentials(self.args))
+            current()
             self.ssid = ssid
             if not self.args.skip_wifi_join:
                 self._join_ap(ssid, password)
 
+            current()
             self.stage = "opening datalink"
             link = Datalink(host=self.args.host)
             # Attached BEFORE open() so the subscription pushes that arrive
@@ -178,6 +336,7 @@ class CameraSession:
             # likely to carry record state and card space.
             link.on_frame = self.census.note
             link.open()
+            current()
 
             # Live view before anything else touches the camera: the decoder
             # has to be listening when the first keyframe arrives.
@@ -187,19 +346,20 @@ class CameraSession:
                 live.on_need_keyframe = self._request_keyframe
                 live.start()
                 link.live = live
-                self.live = live
                 link.send_frame(commands.live_view_enable())
             stick = GimbalStick(link, gain=self.args.gain)
             stick.start()
             runner = MoveRunner(link, stick, kp=self.args.kp, limits=self.limits)
             with self._lock:
-                self.link, self.stick, self.runner = link, stick, runner
+                current()
                 stick.set_speed_cap(
                     response.SPEED_CAPS.get(self.speed_preset,
                                             response.SPEED_CAPS["normal"]))
                 stick.set_ramp(self.ramp)
                 stick.set_axis_stability(self.tilt_stability,
                                           self.pan_stability)
+                self.link, self.stick, self.runner, self.live = link, stick, runner, live
+                adopted = True
                 # Still disarmed: set at the top of this method so a FAILED
                 # connect cannot leave a previously-armed rig live either.
                 self.disarm_reason = "connected -- arm before playing a move"
@@ -208,15 +368,31 @@ class CameraSession:
         except BaseException as exc:
             log.exception("connect failed")
             with self._lock:
-                self.state = "error"
-                self.stage = ""
-                self.error = f"{type(exc).__name__}: {exc}"
+                if generation == self._connect_generation:
+                    self.state = "error"
+                    self.stage = ""
+                    self.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            if not adopted:
+                # Objects may have opened sockets or started threads before
+                # they were published on the session. Always clean those too.
+                for resource, method in ((stick, "stop"), (live, "stop"), (link, "close")):
+                    if resource is not None:
+                        try:
+                            getattr(resource, method)()
+                        except Exception:
+                            log.exception("connection cleanup failed")
+            with self._lock:
+                self._connect_active = False
 
     def disconnect(self) -> None:
+        self.stop_everything("disconnected")
         with self._lock:
+            self._connect_generation += 1
             stick, link, runner, live = self.stick, self.link, self.runner, self.live
             self.stick = self.link = self.runner = self.live = None
             self.state = "idle"
+            self.stage = ""
         # The Core2 deliberately survives a camera disconnect. It is a separate
         # device on a separate cable, and unplugging the camera is no reason to
         # drop a controller the operator is still holding. Its own supervisor
@@ -320,11 +496,15 @@ class CameraSession:
         out["slate"] = dict(self.slate)
         out["takes"] = self.takes[-12:]
         out["take_count"] = len(self.takes)
+        out["workspace"] = self.workspace_info()
+        out["browser_control"] = {"holder": self._browser_client if self.owner == "phone" else None,
+                                   "lease_seconds": BROWSER_LEASE_S}
         r = self.runner
         out["move"] = {
             "name": self.move.name,
             "loop": self.move.loop,
             "ping_pong": self.move.ping_pong,
+            "route_arcs": self.move.route_arcs,
             "waypoints": [w.to_dict() for w in self.move.waypoints],
             "total_duration": round(self.move.total_duration, 2),
             "running": bool(r and r.running),
@@ -336,6 +516,7 @@ class CameraSession:
             "waiting_cue": r.waiting_cue if r else None,
             "cues": self.move.cue_points(),
             "report": r.report.to_dict() if r else None,
+            "fault": getattr(r, "fault", "") if r else "",
         }
         out["limits"] = {"start": round(self.limits.start, 1),
                          "end": round(self.limits.end, 1),
@@ -349,7 +530,8 @@ class CameraSession:
             raise RuntimeError("not connected")
         return self.link, self.stick
 
-    def set_axes(self, tilt: float, pan: float) -> None:
+    @_motion_change
+    def set_axes(self, tilt: float, pan: float, who: str = "phone") -> None:
         """Manual jog. Takes motion authority away from any running program.
 
         One authority at a time: if an operator grabs the stick, the programmed
@@ -357,13 +539,28 @@ class CameraSession:
         half-automatic motion is how someone gets hit.
         """
         _, stick = self.require()
+        if not all(math.isfinite(v) and -1.0 <= v <= 1.0 for v in (tilt, pan)):
+            raise ValueError("stick axes must be finite numbers in -1..1")
+        if who not in ("phone", "core2"):
+            raise ValueError("unknown manual owner")
+        # Even a delayed zero from a browser must not release somebody else's
+        # physical hold. STOP remains the separate, unconditional neutral path.
+        if who == "phone" and self.owner == "core2" and self.clutch.state.engaged:
+            raise RuntimeError("the Core2 clutch is held -- release it first")
+        if who == "phone" and self.owner == "core2" and time.monotonic() < self._manual_until:
+            raise RuntimeError("Core2 jog is active -- release it first")
+        if not (tilt or pan) and self.owner not in ("none", who):
+            return
         if self.runner is not None and self.runner.running:
             self.runner.stop(aborted=True)
             self.disarm("manual takeover")
         elif self.armed and (tilt or pan):
             self.disarm("manual takeover")
         if tilt or pan:
-            self.owner = "phone"
+            self.take_ownership(who)
+            self._manual_until = time.monotonic() + BROWSER_LEASE_S
+        else:
+            self._manual_until = 0.0
         # Intent feeds the limit warning as well as the head: a full-deflection
         # command toward a stop should light the indicator now, not a quarter
         # second later once the rate estimate has caught up.
@@ -373,6 +570,113 @@ class CameraSession:
         # approached.
         self.limit_monitor.command(tilt / TILT_SIGN, pan / YAW_SIGN)
         stick.set_axes(tilt, pan)
+
+    def _clear_browser(self):
+        record = self._browser_packets.get(self._browser_client)
+        if record is not None:
+            record["closed"] = True
+        self._browser_client = None
+        self._browser_until = 0.0
+        if self._browser_timer is not None:
+            self._browser_timer.cancel()
+            self._browser_timer = None
+
+    @_motion_change
+    def _expire_browser(self):
+        if self._browser_timer is not None:
+            self._browser_timer.cancel()
+            self._browser_timer = None
+        if self._browser_client is None:
+            return
+        remaining = self._browser_until - time.monotonic()
+        if remaining > 0:
+            self._browser_timer = threading.Timer(remaining, self._expire_browser)
+            self._browser_timer.daemon = True
+            self._browser_timer.start()
+            return
+        self._clear_browser()
+        if self.owner == "phone":
+            self.clutch.abort()
+            if self.stick is not None:
+                self.stick.abort()
+            self.owner = "none"
+
+    def _check_browser(self, client: str):
+        if not isinstance(client, str) or not 1 <= len(client) <= 80 or not all(
+                c.isascii() and (c.isalnum() or c in "_-") for c in client):
+            raise ValueError("invalid browser controller ID")
+        if self._browser_client is not None and time.monotonic() >= self._browser_until:
+            self._expire_browser()
+        if self._browser_client not in (None, client):
+            raise RuntimeError("Another browser controls motion; release it or use Stop motion")
+
+    def _renew_browser(self, client: str):
+        self._browser_client = client
+        self._browser_until = time.monotonic() + BROWSER_LEASE_S
+        if self._browser_timer is None:
+            self._browser_timer = threading.Timer(BROWSER_LEASE_S, self._expire_browser)
+            self._browser_timer.daemon = True
+            self._browser_timer.start()
+
+    def _browser_packet(self, client, sequence, gesture, moving):
+        if sequence is None:
+            return  # Deliberate legacy non-browser API compatibility.
+        if type(sequence) is not int or not 0 < sequence <= 2**53 - 1:
+            raise ValueError("invalid motion packet sequence")
+        if not isinstance(gesture, str) or not 1 <= len(gesture) <= 80 or not all(
+                c.isascii() and (c.isalnum() or c in "_-") for c in gesture):
+            raise ValueError("invalid motion gesture ID")
+        previous = self._browser_packets.get(client)
+        if previous is not None:
+            if sequence <= previous["sequence"]:
+                raise RuntimeError("stale motion packet refused")
+            if moving and previous["gesture"] == gesture and previous["closed"]:
+                raise RuntimeError("this hold ended; release and touch again")
+        elif len(self._browser_packets) >= 256:
+            raise RuntimeError("controller capacity reached; restart the host when safe")
+        self._browser_packets[client] = {"sequence": sequence, "gesture": gesture, "closed": not moving}
+
+    @_motion_change
+    def browser_axes(self, client: str, tilt: float, pan: float, sequence=None, gesture="legacy"):
+        # Expire first so an old gesture cannot reacquire after its deadline.
+        if self._browser_client is not None and time.monotonic() >= self._browser_until:
+            self._expire_browser()
+        self._browser_packet(client, sequence, gesture, bool(tilt or pan))
+        try:
+            self._check_browser(client)
+            self.set_axes(tilt, pan)
+        except (RuntimeError, ValueError):
+            if client in self._browser_packets:
+                self._browser_packets[client]["closed"] = True
+            raise
+        if tilt or pan:
+            self._renew_browser(client)
+        elif self._browser_client == client:
+            self._clear_browser()
+
+    @_motion_change
+    def browser_grab(self, client: str, sequence=None, gesture="legacy"):
+        if self._browser_client is not None and time.monotonic() >= self._browser_until:
+            self._expire_browser()
+        self._browser_packet(client, sequence, gesture, True)
+        try:
+            self._check_browser(client)
+            self.grab("phone")
+        except (RuntimeError, ValueError):
+            if client in self._browser_packets:
+                self._browser_packets[client]["closed"] = True
+            raise
+        self._renew_browser(client)
+
+    @_motion_change
+    def browser_release(self, client: str, sequence=None, gesture="legacy"):
+        self._browser_packet(client, sequence, gesture, False)
+        self._check_browser(client)
+        if self._browser_client == client:
+            self.let_go("phone")
+            if self.stick is not None:
+                self.stick.release()
+            self._clear_browser()
 
     def _join_ap(self, ssid: str, password: str) -> None:
         """Join the camera access point, waking it again if it is not up yet.
@@ -518,9 +822,7 @@ class CameraSession:
     def _core2_jog(self, tilt: float, pan: float) -> None:
         """Jog pad on the box. Same ownership rules as the phone's stick."""
         try:
-            if tilt or pan:
-                self.take_ownership("core2")
-            self.set_axes(tilt, pan)
+            self.set_axes(tilt, pan, "core2")
         except Exception as exc:
             log.debug("core2 jog refused: %s", exc)
 
@@ -698,6 +1000,7 @@ class CameraSession:
 
     # -- control ownership ----------------------------------------------------
 
+    @_motion_change
     def take_ownership(self, who: str) -> None:
         """Claim motion authority, pre-empting whatever held it.
 
@@ -710,6 +1013,8 @@ class CameraSession:
             if self.runner is not None and self.runner.running:
                 self.runner.stop(aborted=True)
             self.disarm(f"{who} took control")
+        if who != "phone":
+            self._clear_browser()
         self.owner = who
 
     def release_ownership(self, who: str) -> None:
@@ -718,6 +1023,7 @@ class CameraSession:
 
     # -- kinetic clutch -------------------------------------------------------
 
+    @_motion_change
     def grab(self, who: str = "phone") -> None:
         """Take the head from wherever it is. The frame must not jump."""
         link, _ = self.require()
@@ -729,7 +1035,10 @@ class CameraSession:
         self.clutch.engage(imu_pitch=imu, gimbal_pitch=att.pitch, gimbal_yaw=att.yaw)
         self._start_kinetic()
 
+    @_motion_change
     def let_go(self, who: str = "phone") -> None:
+        if self.owner != who:
+            return
         self.clutch.release()
         self.release_ownership(who)
 
@@ -798,8 +1107,12 @@ class CameraSession:
         self.disarm_reason = ""
         log.info("ARMED -- the rig may now move on its own")
 
+    @_motion_change
     def stop_everything(self, reason: str = "STOP") -> None:
         """Universal stop. Immediate neutral, no easing, no confirmation."""
+        self._clear_browser()
+        for record in self._browser_packets.values():
+            record["closed"] = True
         self.clutch.abort()
         self._kinetic_stop.set()
         if self.runner is not None and self.runner.running:
@@ -914,12 +1227,19 @@ class CameraSession:
 
     # -- take log -------------------------------------------------------------
 
+    @_workspace_change
     def log_take(self, note: str = "", circled: bool = False,
                  move_name: str = "") -> dict:
         """Record what was shot. A take log is the point of a slate."""
         # The validity record is what separates "the director liked it" from
         # "the rig actually repeated the move".
-        report = self.runner.report.to_dict() if self.runner is not None else None
+        run = self._shot_run
+        if run and run["id"] == self._logged_run_id:
+            run = None
+        if run and self.runner and self.runner.report is run["report"] and self.runner.running:
+            raise RuntimeError("stop or finish the shot before logging its take")
+        shot = run["shot"] if run else self.move
+        report = run["report"].to_dict() if run else None
         entry = {
             # Stable within the session. Compare and export address a take by
             # this, never by its position in whatever slice a client saw.
@@ -929,13 +1249,21 @@ class CameraSession:
             "take": self.slate["take"],
             "note": note,
             "circled": circled,
-            "move": move_name or (self.move.name if self.move.waypoints else ""),
-            "duration": round(self.move.total_duration, 2) if self.move.waypoints else 0.0,
-            "setup": self.move.setup_summary(),
+            "move": shot.name if run else (move_name or (shot.name if shot.waypoints else "")),
+            "duration": round(shot.playback_duration or (report or {}).get("elapsed", 0.0), 2) if shot.waypoints else 0.0,
+            "setup": shot.setup_summary(),
+            "setup_fields": copy.deepcopy(shot.setup),
+            "path": shot.to_dict() if run else None,
+            "run_id": run["id"] if run else None,
+            "source": "shot run" if run else "manual note — no shot run attached",
+            "fingerprint": run["fingerprint"] if run else None,
+            "recording": dict(run["recording"]) if run else {"requested": self.recording, "reported": False},
             "motion": report,
             "at": time.strftime("%H:%M:%S"),
         }
         self.takes.append(entry)
+        if run:
+            self._logged_run_id = run["id"]
         self.slate["take"] += 1
         return entry
 
@@ -967,12 +1295,29 @@ class CameraSession:
         # The operator's stated lens beats the house assumption, and the
         # result says which it used: every pixel figure here depends on the
         # field of view and nothing on this camera reports it.
-        stated = self.move.fov_deg()
+        a, b = self.takes[first], self.takes[second]
+        if a.get("fingerprint") and b.get("fingerprint") and a["fingerprint"] != b["fingerprint"]:
+            raise ValueError("these takes belong to different shot versions; a repeatability match would be misleading")
+        have_snapshot = "setup_fields" in a or "setup_fields" in b
+        if have_snapshot:
+            lenses = [moves.Move(setup=t.get("setup_fields") or {}).fov_deg() for t in (a, b)]
+            if fov_deg is None and lenses[0] != lenses[1]:
+                raise ValueError("take lens setups differ; supply an explicit FOV for comparison")
+            stated = lenses[0]
+        else:
+            # Legacy logs have no saved lens metadata. Retain the old fallback
+            # with its existing source label; new takes never read this draft.
+            stated = self.move.fov_deg()
         used = fov_deg if fov_deg is not None else stated
         out = repeatability.compare(
             traces[0], traces[1],
             fov_deg=used if used is not None else repeatability.DEFAULT_FOV_DEG,
-            width_px=width_px).to_dict()
+            width_px=width_px,
+            duration_a=a.get("duration") or None,
+            duration_b=b.get("duration") or None,
+            aborted_a=(a.get("motion") or {}).get("aborted", False),
+            aborted_b=(b.get("motion") or {}).get("aborted", False)).to_dict()
+        out["timeline"] = "programmed motion time; excludes live cue waits; not video timecode"
         out["fov_assumed"] = used is None
         out["fov_source"] = ("request" if fov_deg is not None
                              else "shot setup" if stated is not None
@@ -984,6 +1329,7 @@ class CameraSession:
         t = self.takes[i]
         return f"{t.get('scene', '')}{t.get('shot', '')}/{t.get('take', i + 1)}"
 
+    @_workspace_change
     def set_slate(self, scene: str | None, shot: str | None, take: int | None) -> None:
         if scene is not None:
             self.slate["scene"] = str(scene)
@@ -992,10 +1338,21 @@ class CameraSession:
         if take is not None:
             self.slate["take"] = max(1, int(take))
 
+    @_workspace_change
     def circle_last_take(self) -> None:
         if not self.takes:
             raise RuntimeError("no takes logged yet")
         self.takes[-1]["circled"] = not self.takes[-1]["circled"]
+
+    @_workspace_change
+    def circle_take(self, take_id: int) -> None:
+        if type(take_id) is not int:
+            raise ValueError("take ID must be an integer")
+        for take in self.takes:
+            if take["id"] == take_id:
+                take["circled"] = not take["circled"]
+                return
+        raise ValueError("take no longer exists")
 
     def move_path(self, samples: int = 240) -> dict:
         """The move sampled by the real sampler, for drawing.
@@ -1019,15 +1376,18 @@ class CameraSession:
 
     # -- between takes -----------------------------------------------------------
 
+    @_workspace_change
     def retime_move(self, factor: float | None = None,
                     total: float | None = None) -> dict:
         self.move = self.move.retimed(factor=factor, total=total)
         return {"total_duration": round(self.move.total_duration, 2)}
 
+    @_workspace_change
     def offset_move(self, pitch: float = 0.0, yaw: float = 0.0) -> dict:
         self.move = self.move.offset(pitch=pitch, yaw=yaw)
         return {"waypoints": [w.to_dict() for w in self.move.waypoints]}
 
+    @_workspace_change
     def reference_move_here(self) -> dict:
         """Shift the stored move so it starts from where the head is now.
 
@@ -1107,7 +1467,7 @@ class CameraSession:
         Reported rather than resumed automatically. Restarting into a shoot
         whose scene was struck two hours ago would be worse than losing it.
         """
-        got = timelapse.load_progress(MOVES_DIR, self.move, now=time.time())
+        got = timelapse.load_progress(self.state_dir, self.move, now=time.time())
         if got is None:
             return {"available": False}
         return {
@@ -1134,7 +1494,7 @@ class CameraSession:
 
         done = 0
         if resume:
-            got = timelapse.load_progress(MOVES_DIR, self.move, now=time.time())
+            got = timelapse.load_progress(self.state_dir, self.move, now=time.time())
             if got is None:
                 raise RuntimeError("there is no interrupted timelapse to resume")
             if not got.get("matches"):
@@ -1153,6 +1513,9 @@ class CameraSession:
             }, pitch_span=0.0, yaw_span=0.0)
         else:
             plan = timelapse.plan_for(self.move, **kw)
+
+        if plan.mode != "sms":
+            raise ValueError("continuous timelapse is planning-only; use shoot-move-shoot to run")
 
         poses = timelapse.frame_poses(self.move, plan.frames)
         if len(poses) < 2:
@@ -1230,7 +1593,7 @@ class CameraSession:
                 # 1200 is recoverable; one that dies without a record is a lost
                 # afternoon.
                 try:
-                    timelapse.save_progress(MOVES_DIR, self.move, plan, shot,
+                    timelapse.save_progress(self.state_dir, self.move, plan, shot,
                                             time.time())
                 except OSError:
                     log.warning("could not save timelapse progress", exc_info=True)
@@ -1247,7 +1610,7 @@ class CameraSession:
             # A finished shoot offering to resume itself is a trap the morning
             # after; an interrupted one must keep its place.
             if self.tl_state.get("frame", 0) >= self.tl_state.get("frames", 0):
-                timelapse.clear_progress(MOVES_DIR)
+                timelapse.clear_progress(self.state_dir)
             self.tl_state = dict(self.tl_state, running=False)
             if self.owner == "program":
                 self.owner = "none"
@@ -1284,11 +1647,9 @@ class CameraSession:
     def preflight(self, at_preset: bool = True) -> dict:
         """Report what the rig cannot do with the move currently loaded.
 
-        Reports rather than blocks. `MoveRunner` already clamps pitch to the
-        soft limit while running, so a move that leaves the arc is not a crash
-        -- it is a move that quietly arrives somewhere other than where it was
-        authored. This says where and by how much, before the take rather than
-        after it.
+        Planning report, not physical certification. The runner independently
+        aborts any target outside configured travel at execution time. This
+        explains path problems before a take rather than silently clamping it.
 
         Checked against the selected sensitivity by default, because "the head
         could do this at full throw" is not the useful question when the
@@ -1297,19 +1658,52 @@ class CameraSession:
         cap = (response.SPEED_CAPS.get(self.speed_preset,
                                        response.SPEED_CAPS["normal"])
                if at_preset else response.MAX_DPS)
+        ramp_cap = shaping.get_ramp(self.ramp).speed_cap
+        if ramp_cap is not None:
+            cap = min(cap, ramp_cap)
         report = preflight.check(self.move, max_dps=cap).to_dict()
         report["speed_preset"] = self.speed_preset if at_preset else "full throw"
         report["max_dps"] = cap
         return report
 
+    def director_preview(self, data: dict) -> dict:
+        """Non-actuating inspection. Proposed/draft input never becomes live state."""
+        with self._workspace_lock:
+            move = moves.Move.from_dict(data["move"] if "move" in data else self.move.to_dict())
+            generation = self.workspace_info()["generation"]
+            speed_preset, ramp = self.speed_preset, self.ramp
+            cap = self.director_speed_cap()
+        result = director.preview(move, max_dps=cap, target_duration=data.get("target_duration"))
+        result["rig"] = {"max_dps": cap, "speed_preset": speed_preset, "ramp": ramp}
+        return {"ok": True, "director": result, "generation": generation}
+
+    def director_speed_cap(self) -> float:
+        cap = response.SPEED_CAPS.get(self.speed_preset, response.SPEED_CAPS["normal"])
+        ramp_cap = shaping.get_ramp(self.ramp).speed_cap
+        return min(cap, ramp_cap) if ramp_cap is not None else cap
+
+    def assistant_prepare(self, client: str, data: dict) -> dict:
+        with self._workspace_lock:
+            generation = self.workspace_info()["generation"]
+            if data.get("generation") != generation:
+                raise ValueError("Draft changed. Review the current shot before sharing it.")
+            snapshot = moves.Move.from_dict(self.move.to_dict())
+            cap = self.director_speed_cap()
+        return self.assistant.prepare(client, snapshot, generation, data.get("brief"),
+                    include_labels=data.get("include_labels", False),
+                    model=data.get("model", "gpt-5.6-luna"), effort=data.get("effort", "low"),
+                    max_dps=cap, min_dps=response.MIN_DPS)
+
     # -- shot library -----------------------------------------------------------
 
+    @_workspace_change
     def save_move(self, name: str) -> dict:
         """Put the move being edited into the library under `name`."""
         entry = self.library.save(name, self.move)
         self.move.name = entry.name
         return entry.to_dict()
 
+    @_workspace_change
     def load_move(self, name: str) -> dict:
         """Recall a saved move for editing and playback.
 
@@ -1323,8 +1717,10 @@ class CameraSession:
         return {"name": self.move.name,
                 "waypoints": [w.to_dict() for w in self.move.waypoints],
                 "loop": self.move.loop, "ping_pong": self.move.ping_pong,
+                "route_arcs": self.move.route_arcs,
                 "setup": dict(self.move.setup)}
 
+    @_workspace_change
     def delete_move(self, name: str) -> bool:
         return self.library.delete(name)
 
@@ -1366,6 +1762,7 @@ class CameraSession:
 
     # -- moves --------------------------------------------------------------
 
+    @_workspace_change
     def capture_waypoint(self, name: str = "", flow: bool = False,
                          zoom: float | None = None,
                          zoom_easing: str = moves.DEFAULT_EASING,
@@ -1396,13 +1793,16 @@ class CameraSession:
         self.move.waypoints.append(wp)
         return wp.to_dict()
 
+    @_workspace_change
     def set_move(self, data: dict) -> None:
+        if self.runner is not None and self.runner.running or self.preroll_until:
+            raise RuntimeError("stop the move or countdown before editing its path")
         self.move = moves.Move.from_dict(data)
 
+    @_workspace_change
     def set_setup(self, fields: dict) -> None:
         """Record how the camera is rigged, alongside the move."""
-        self.move.setup.update({k: v for k, v in fields.items()
-                                if k in moves.Move.SETUP_FIELDS})
+        self.move.setup.update(moves.Move.validated_setup(fields))
 
     def _play_preflight(self, force: bool = False) -> None:
         """Everything play() checks before it commits, so ROLL can check the
@@ -1435,7 +1835,24 @@ class CameraSession:
     def play(self, force: bool = False) -> None:
         self._play_preflight(force)
         self.owner = "program"
-        self.runner.start(self.move)
+        self._start_shot_run()
+
+    def _start_shot_run(self) -> None:
+        """Only full-shot starts can produce take evidence, never positioning.
+
+        MoveRunner allocates a fresh report on start. Keep that exact object,
+        so its final report survives a later goto/rehearsal without callbacks
+        or another motion engine. The executable path is detached from edits.
+        """
+        shot = moves.Move.from_dict(copy.deepcopy(self.move.to_dict()))
+        payload = json.dumps(shot.to_dict(), sort_keys=True, allow_nan=False).encode("utf-8")
+        fingerprint = hashlib.sha256(payload).hexdigest()
+        requested = self.recording
+        self.runner.start(shot)
+        self._shot_run = {"id": secrets.token_hex(8), "shot": shot,
+                          "fingerprint": fingerprint,
+                          "recording": {"requested": requested, "reported": False},
+                          "report": self.runner.report}
 
     # -- pre-roll -------------------------------------------------------------
     # "Roll camera" and "action" are two calls on a set, seconds apart, and
@@ -1465,7 +1882,7 @@ class CameraSession:
         if not self.armed or self.runner is None or self.clutch.state.engaged:
             return
         self.owner = "program"
-        self.runner.start(self.move)
+        self._start_shot_run()
 
     def _cancel_roll(self) -> None:
         timer = getattr(self, "_roll_timer", None)
@@ -1588,37 +2005,57 @@ class Handler(BaseHTTPRequestHandler):
         return str(self.client_address[0]) in ("127.0.0.1", "::1")
 
     def _authorised(self) -> bool:
-        """Token in the query string, a cookie, or a header.
-
-        This surface physically moves a camera, so once it is reachable from
-        anything but loopback it needs a gate. The token is deliberately
-        cheap -- it stops the other people on a set's Wi-Fi from panning your
-        camera; it is not protection against someone who wants in.
-        """
-        if self.token is None:
-            return True
-        # Read-only diagnostics from this machine need no token. The token
-        # exists to stop other people on a set's Wi-Fi driving the camera; it
-        # should not stop the operator reading health from their own console.
-        if self.route == "/api/diag" and self._is_loopback():
-            return True
-        want = self.token
-        query_tokens = parse_qs(urlsplit(self.path).query,
-                                keep_blank_values=True).get("t", ())
-        if any(secrets.compare_digest(token, want) for token in query_tokens):
-            return True
-        if secrets.compare_digest(self.headers.get("X-Osmo-Token", ""), want):
-            return True
+        """Authenticate the presented identity, never upgrade a crew cookie."""
+        self._principal, self._credential = None, None
+        host = urlsplit('http://' + self.headers.get('Host', 'localhost')).hostname
+        local = self._is_loopback() and host in ('localhost', '127.0.0.1', '::1')
         cookies = SimpleCookie()
         try:
-            cookies.load(self.headers.get("Cookie") or "")
+            cookies.load(self.headers.get('Cookie') or '')
         except (CookieError, ValueError):
             return False
-        morsel = cookies.get("osmo_token")
-        return morsel is not None and secrets.compare_digest(morsel.value, want)
+        query = parse_qs(urlsplit(self.path).query, keep_blank_values=True).get('t', [])
+        morsel = cookies.get('osmo_token')
+        # Explicit header/query takes precedence over an older cookie.
+        credential = (self.headers.get('X-Osmo-Token') if 'X-Osmo-Token' in self.headers
+                      else query[0] if query else morsel.value if morsel else None)
+        if credential is not None:
+            # Opaque access tokens are URL-safe, bounded ASCII. Reject header,
+            # cookie-attribute and control characters before any comparison.
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,256}", credential) is None:
+                return False
+            if self.token and secrets.compare_digest(credential.encode(), self.token.encode()):
+                self._principal = dict(id='host', role='owner' if local else 'operator', allow_ai=True)
+            else:
+                access = getattr(self.session, 'crew', None)
+                self._principal = access.resolve(credential) if access else None
+            if self._principal:
+                self._credential = credential
+                return True
+            return False  # Invalid/expired credentials cannot inherit loopback authority.
+        if self.token is None and local:
+            self._principal = dict(id='host', role='owner', allow_ai=True)
+            return True
+        if self.route == '/api/diag' and local:
+            self._principal = dict(id='diagnostics', role='viewer', allow_ai=False)
+            return True
+        return False
+
+    def _permission(self, method):
+        if crew.permitted(self._principal, method, self.route):
+            return True
+        self._json({'ok': False, 'error': 'This role cannot perform that action. Host settings require the local owner.'}, 403)
+        return False
 
     def log_message(self, fmt, *a):  # quieter than the default access log
-        log.debug(fmt, *a)
+        # Query-string credentials must not enter access logs.
+        log.debug('%s %s', getattr(self, 'command', 'HTTP'), self.route)
+
+    def end_headers(self):
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        super().end_headers()
 
     # -- helpers ------------------------------------------------------------
 
@@ -1632,6 +2069,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, payload: dict, code: int = 200) -> None:
+        if self.route in WORKSPACE_ROUTES and payload.get("ok"):
+            payload = dict(payload, workspace=self.session.workspace_info())
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -1647,10 +2086,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.send_response(200)
-        if self.token:
-            # Set once from ?t=, so in-page fetches need no query string.
-            self.send_header("Set-Cookie",
-                             f"osmo_token={self.token}; Path=/; SameSite=Strict")
+        if getattr(self, '_credential', None):
+            # Keep the authenticated principal; never reflect a raw header or
+            # query string into Set-Cookie. Encoding is defense in depth after
+            # the strict token alphabet check at the authorization boundary.
+            cookie = SimpleCookie()
+            cookie['osmo_token'] = quote(self._credential, safe='')
+            cookie['osmo_token']['path'] = '/'
+            cookie['osmo_token']['samesite'] = 'Strict'
+            cookie['osmo_token']['httponly'] = True
+            self.send_header("Set-Cookie", cookie.output(header='').strip())
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -1672,6 +2117,8 @@ class Handler(BaseHTTPRequestHandler):
         seen = -1
         try:
             while True:
+                if self._principal['id'] != 'host' and not self.session.crew.resolve(self._credential):
+                    return
                 jpg, seen = live.wait_for_frame(since=seen, timeout=5.0)
                 if jpg is None:
                     if self.session.live is None:
@@ -1686,6 +2133,8 @@ class Handler(BaseHTTPRequestHandler):
             pass  # viewer navigated away
 
     def _body(self) -> dict:
+        if hasattr(self, '_request_body'):
+            return self._request_body
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError as exc:
@@ -1710,13 +2159,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorised():
             self._deny()
             return
-        # The monitor is the landing page. It is what the camera operator uses;
-        # the engineering panel is for building moves and diagnosing the rig,
-        # which is a different job done at a different time. Having the
-        # engineering view on "/" meant the monitor was effectively invisible.
-        if self.route in ("/", "/cine", "/cine.html"):
+        if not self._permission('GET'):
+            return
+        # Shot Studio is the offline-capable starting point. The specialist
+        # monitor remains directly reachable at /cine, without auto-connecting.
+        if self.route in ("/cine", "/cine.html"):
             self._file(WEB_DIR / "cine.html", "text/html; charset=utf-8")
-        elif self.route in ("/panel", "/index.html"):
+        elif self.route in ("/", "/panel", "/index.html"):
             self._file(WEB_DIR / "index.html", "text/html; charset=utf-8")
         elif self.route in ("/mobile", "/mobile.html"):
             self._file(WEB_DIR / "mobile.html", "text/html; charset=utf-8")
@@ -1724,8 +2173,40 @@ class Handler(BaseHTTPRequestHandler):
             # Assists and scopes, shared by both pages so the exposure maths
             # cannot drift into two disagreeing copies.
             self._file(WEB_DIR / "monitor.js", "application/javascript; charset=utf-8")
+        elif self.route in ("/session.js", "/director.js", "/copilot.js", "/workspace-layout.js", "/studio-settings.js", "/ui.js", "/vendor/snapgrid.js"):
+            self._file(WEB_DIR / self.route[1:], "application/javascript; charset=utf-8")
+        elif self.route in ("/director.css", "/copilot.css", "/workspace-layout.css", "/studio-settings.css", "/ui.css"):
+            self._file(WEB_DIR / self.route.lstrip("/"), "text/css; charset=utf-8")
+        elif self.route == '/api/access':
+            self._json({'ok': True, 'identity': self._principal, 'lan_available': bool(self.token)})
+        elif self.route == '/api/crew':
+            self._json({'ok': True, 'members': self.session.crew.list(), 'lan_available': bool(self.token)})
+        elif self.route == '/api/settings/ai':
+            self._json({'ok': True, 'settings': self.session.host_settings.public() if self.session.host_settings else None,
+                        'usage': self.session.assistant.status()})
+        elif self.route == '/api/workspace/recovery':
+            self._json({'ok': True, 'recovery': self.session.journal.recovery_info() if self.session.journal else None,
+                        'workspace': self.session.workspace_info()})
+        elif self.route == '/api/decoder':
+            from driver.liveview import decoder_capability
+            self._json({'ok': True, 'decoder': decoder_capability()})
+        elif self.route in ("/api/assistant/status", "/api/assistant/job"):
+            try:
+                self._assistant_access()
+                if self.route.endswith("/status"):
+                    prefs = self.session.host_settings.public() if self.session.host_settings else {}
+                    self._json({"ok": True, **self.session.assistant.status(),
+                                'defaults': {k: prefs[k] for k in ('model', 'effort') if k in prefs}})
+                else:
+                    job_id = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
+                    with self.session._workspace_lock:
+                        generation = self.session.workspace_info()["generation"]
+                    self._json({"ok": True, **self.session.assistant.job(self._assistant_client(), job_id, generation)})
+            except (ValueError, ProviderError, assistant.AssistantError) as exc:
+                self._json({"ok": False, "error": str(exc)}, 400)
         elif self.route == "/api/status":
-            self._json(self.session.status())
+            with self.session._workspace_lock:
+                self._json(self.session.status())
         elif self.route == "/api/takes":
             # The whole log. Status carries only the tail, and a compare or an
             # export built from a tail silently addresses the wrong takes.
@@ -1788,11 +2269,138 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        if hasattr(self, '_request_body'):
+            del self._request_body
+        if not self._authorised():
+            self._deny()
+            return
+        if not self._permission('POST'):
+            return
+        origin = self.headers.get("Origin")
+        if (self.headers.get("Sec-Fetch-Site") == "cross-site" or
+                (origin is not None and origin != "http://" + self.headers.get("Host", ""))):
+            self._json({"ok": False, "error": "Cross-origin control requests are refused"}, 403)
+            return
+        if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+            self._json({"ok": False, "error": "Use application/json for control requests"}, 415)
+            return
+        if self._principal['id'] != 'host':
+            try:
+                self._request_body = self._body()
+            except ValueError as exc:
+                self._json({'ok': False, 'error': str(exc)}, 400)
+                return
+            # Parse before locking, then authenticate again at admission. A
+            # slow body cannot execute after its credential was revoked.
+            with self.session.crew._lock:
+                if not self._authorised():
+                    self._deny()
+                    return
+                self._post_workspace()
+        else:
+            self._post_workspace()
+
+    def _post_workspace(self):
+        origin = self.headers.get('Origin')
+        is_workspace = self.route in WORKSPACE_ROUTES
+        with self.session._workspace_lock if is_workspace else nullcontext():
+            if is_workspace:
+                expected = self.headers.get("X-Osmo-Generation")
+                # Explicit non-browser clients retain the established API;
+                # every bundled browser sends a generation and controller ID.
+                browser = origin is not None or self.headers.get("Sec-Fetch-Mode") is not None or self.headers.get("X-Osmo-Client") is not None
+                if browser and expected is None:
+                    self._json({"ok": False, "error": "Load the current workspace before editing", "workspace": self.session.workspace_info()}, 428)
+                    return
+                if expected is not None and expected != self.session.workspace_info()["generation"]:
+                    self._json({"ok": False, "error": "Workspace changed in another tab. Your edits were not applied; reload or export them first.", "conflict": True, "workspace": self.session.workspace_info()}, 409)
+                    return
+            self._dispatch_post()
+
+    def _browser_id(self):
+        client = self.headers.get("X-Osmo-Client")
+        if client is None and self.headers.get("Origin") is not None:
+            raise ValueError("browser controller ID required; reload this page")
+        client = client or 'legacy-native-client'
+        principal = getattr(self, '_principal', None)
+        return ('crew:' + principal['id'] + ':' + client if principal and principal['id'] != 'host' else client)
+
+    def _assistant_access(self):
+        if not crew.permitted(getattr(self, '_principal', None), 'POST', '/api/assistant/send'):
+            raise ValueError('This crew role has no AI spending permission')
+        host = urlsplit("http://" + self.headers.get("Host", "localhost")).hostname
+        local = self._is_loopback() and host in ("localhost", "127.0.0.1", "::1")
+        if not local and not (getattr(self.session.args, "ai_lan", False) and self.token):
+            raise ValueError("Cloud AI is host-only. The host must opt in to authenticated LAN AI access.")
+
+    def _assistant_client(self):
+        client = self.headers.get("X-Osmo-Client", "")
+        if not client or len(client) > 128:
+            raise ValueError("Reload the page to establish an AI request owner.")
+        principal = getattr(self, '_principal', None)
+        return ('crew:' + principal['id'] + ':' + client if principal and principal['id'] != 'host' else client)
+
+    def _browser_packet_args(self):
+        sequence = self.headers.get("X-Osmo-Sequence")
+        if sequence is None and self.headers.get("Origin") is not None:
+            raise ValueError("motion sequence required; reload this page")
+        return {"sequence": int(sequence) if sequence is not None else None,
+                "gesture": self.headers.get("X-Osmo-Gesture", "legacy")}
+
+    def _dispatch_post(self):
         if not self._authorised():
             self._deny()
             return
         try:
-            if self.route == "/api/connect":
+            if self.route == '/api/settings/ai':
+                body = self._body()
+                if body.get('allow_lan') is True and not self.token:
+                    raise ValueError('Start a token-protected LAN host before enabling crew AI')
+                self._json({'ok': True, 'settings': self.session.update_ai_settings(body), 'usage': self.session.assistant.status()})
+            elif self.route == '/api/crew':
+                if not self.token:
+                    raise ValueError('Start a token-protected LAN host before sharing crew access')
+                self._json({'ok': True, 'member': self.session.crew.issue(**self._body())})
+            elif self.route == '/api/crew/revoke':
+                self.session.revoke_crew(self._body().get('id'))
+                self._json({'ok': True})
+            elif self.route == '/api/workspace/recovery':
+                self._json(self.session.recover_workspace(self._body()))
+            elif self.route == '/api/editorial/export':
+                from driver.editorial import build_package
+                body = self._body()
+                with self.session._workspace_lock:
+                    takes = copy.deepcopy(self.session.takes)
+                raw = build_package(takes, body.get('ids'), fps=body.get('fps', 25), include_notes=body.get('include_notes', False))
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/zip')
+                self.send_header('Content-Disposition', 'attachment; filename="osmodesk-editorial.zip"')
+                self.send_header('Content-Length', str(len(raw)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(raw)
+            elif self.route.startswith("/api/assistant/"):
+                self._assistant_access()
+                client, body = self._assistant_client(), self._body()
+                if self.route == "/api/assistant/prepare":
+                    self._json({"ok": True, **self.session.assistant_prepare(client, body)})
+                elif self.route == "/api/assistant/send":
+                    if body.get("consent") is not True:
+                        raise ValueError("Review the shared data and explicitly choose Send to OpenAI.")
+                    with self.session._workspace_lock:
+                        generation = self.session.workspace_info()["generation"]
+                        if body.get("generation") != generation:
+                            raise ValueError("Draft changed. Prepare a fresh disclosure before sending.")
+                        # Admission is short and nonblocking; make it atomic
+                        # with the revision check. The background worker does
+                        # not acquire this lock or await it for provider IO.
+                        admitted = self.session.assistant.send(client, body.get("confirmation"), generation)
+                    self._json({"ok": True, **admitted}, 202)
+                elif self.route == "/api/assistant/cancel":
+                    self._json({"ok": True, **self.session.assistant.cancel(client, body.get("job_id"))})
+                else:
+                    self.send_error(404)
+            elif self.route == "/api/connect":
                 self.session.connect()
                 self._json({"ok": True})
             elif self.route == "/api/disconnect":
@@ -1800,8 +2408,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True})
             elif self.route == "/api/stick":
                 body = self._body()
-                self.session.set_axes(float(body.get("tilt", 0.0)),
-                                      float(body.get("pan", 0.0)))
+                self.session.browser_axes(self._browser_id(), float(body.get("tilt", 0.0)),
+                                          float(body.get("pan", 0.0)), **self._browser_packet_args())
                 self._json({"ok": True})
             elif self.route == "/api/camera":
                 b = self._body()
@@ -1822,7 +2430,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.session.set_slate(b.get("scene"), b.get("shot"), b.get("take"))
                 self._json({"ok": True})
             elif self.route == "/api/take/circle":
-                self.session.circle_last_take()
+                self.session.circle_take(self._body().get("id"))
                 self._json({"ok": True})
             elif self.route == "/api/waypoint":
                 body = self._body()
@@ -1839,8 +2447,23 @@ class Handler(BaseHTTPRequestHandler):
                                                     moves.DEFAULT_EASING)),
                                 duration=float(body.get("duration", 3.0)))})
             elif self.route == "/api/move":
-                self.session.set_move(self._body())
-                self._json({"ok": True})
+                body = self._body()
+                ai = body.get("_assistant")
+                if ai is not None:
+                    self._assistant_access()
+                    if set(body) != {"_assistant"} or not isinstance(ai, dict) or set(ai) != {"job_id", "index"}:
+                        raise ValueError("Invalid AI treatment selection.")
+                    body = self.session.assistant.candidate(self._assistant_client(), ai["job_id"],
+                            ai["index"], self.session.workspace_info()["generation"])
+                    # Rig response settings can change without a draft revision.
+                    # Assess again against the current cap before the normal edit.
+                    check = director.preview(moves.Move.from_dict(body), max_dps=self.session.director_speed_cap())
+                    if not check["preflight"]["ok"]:
+                        raise ValueError("Treatment no longer passes the current rig check. Reassess before applying.")
+                self.session.set_move(body)
+                self._json({"ok": True, **({"move": self.session.move.to_dict()} if ai is not None else {})})
+            elif self.route == "/api/director/preview":
+                self._json(self.session.director_preview(self._body()))
             elif self.route == "/api/moves/save":
                 self._json({"ok": True,
                             "entry": self.session.save_move(
@@ -1864,8 +2487,8 @@ class Handler(BaseHTTPRequestHandler):
                             "comparison": self.session.compare_takes(
                                 int(body.get("first", 0)),
                                 int(body.get("second", 1)),
-                                float(body.get("fov_deg",
-                                               repeatability.DEFAULT_FOV_DEG)),
+                                (None if body.get("fov_deg") is None
+                                 else float(body["fov_deg"])),
                                 int(body.get("width_px",
                                              repeatability.DEFAULT_WIDTH_PX)))})
             elif self.route == "/api/timelapse/plan":
@@ -1903,10 +2526,10 @@ class Handler(BaseHTTPRequestHandler):
                                     str(body.get("cube", "")),
                                     str(body.get("name", "")))})
             elif self.route == "/api/grab":
-                self.session.grab("phone")
+                self.session.browser_grab(self._browser_id(), **self._browser_packet_args())
                 self._json({"ok": True})
             elif self.route == "/api/release":
-                self.session.let_go("phone")
+                self.session.browser_release(self._browser_id(), **self._browser_packet_args())
                 self._json({"ok": True})
             elif self.route == "/api/stop":
                 self.session.stop_everything(str(self._body().get("reason", "STOP")))
@@ -1996,7 +2619,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404)
         except Exception as exc:
-            self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, code=400)
+            if self.route.startswith("/api/assistant/"):
+                message = str(exc) if isinstance(exc, (ValueError, ProviderError, assistant.AssistantError)) else "AI request failed. Draft unchanged."
+                self._json({"ok": False, "error": message}, code=400)
+            else:
+                self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, code=400)
 
 
 def _local_ip_towards(host: str, port: int = 80) -> str | None:
@@ -2064,6 +2691,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8722)
+    ap.add_argument("--state-dir", type=Path, default=MOVES_DIR,
+                    help="absolute, non-symlink directory for shots, journal, AI preferences and timelapse state")
     ap.add_argument("--lan", action="store_true",
                     help="serve on all interfaces so a phone or tablet can drive it")
     ap.add_argument("--bind", help="explicit bind address (implies --lan behaviour)")
@@ -2090,12 +2719,50 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the HEVC decoder (control only)")
     ap.add_argument("--autoconnect", action="store_true",
                     help="connect to the camera as soon as the server starts")
+    ap.add_argument("--enable-ai", action="store_true",
+                    help="enable optional, operator-confirmed OpenAI Shot Copilot")
+    ap.add_argument("--ai-env", type=Path,
+                    help="explicit local env file containing OPENAI_API_KEY (never copied)")
+    ap.add_argument("--ai-lan", action="store_true",
+                    help="allow authenticated LAN operators to use the host's AI budget")
+    ap.add_argument("--ai-budget-usd", type=float, default=1.0,
+                    help="per-process conservative estimated AI reservation ceiling (default $1)")
+    ap.add_argument("--ai-request-limit", type=int, default=20,
+                    help="maximum paid requests per server process (default 20)")
     ap.add_argument("-v", "--verbose", action="store_true")
     return ap
 
 
+def configured_assistant(args, env: dict) -> assistant.Assistant:
+    """Explicit host configuration. Never return credentials to the browser."""
+    if not args.enable_ai:
+        return assistant.Assistant()
+    bind = args.bind or ("0.0.0.0" if args.lan else "127.0.0.1")
+    if bind not in ("127.0.0.1", "localhost", "::1") and args.no_token:
+        raise ValueError("AI cannot be enabled on a tokenless LAN host.")
+    key = env.get("OPENAI_API_KEY", "")
+    if args.ai_env:
+        try:
+            key = config.parse_env(args.ai_env.read_text(encoding="utf-8")).get("OPENAI_API_KEY", "")
+        except (OSError, UnicodeError):
+            raise ValueError("The selected AI env file could not be read.") from None
+    key = os.environ.get("OPENAI_API_KEY", key)
+    if not key:
+        raise ValueError("AI was enabled but OPENAI_API_KEY is missing from the environment or selected env file.")
+    return assistant.Assistant(OpenAIProvider(key), budget_usd=args.ai_budget_usd,
+                               request_limit=args.ai_request_limit)
+
+
 def main() -> int:
     args = build_parser().parse_args()
+    if args.token and re.fullmatch(r"[A-Za-z0-9_-]{1,256}", args.token) is None:
+        print("access token must use 1-256 letters, digits, underscores or hyphens", file=sys.stderr)
+        return 2
+    try:
+        args.state_dir = state_directory(args.state_dir)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -2103,11 +2770,39 @@ def main() -> int:
         datefmt="%H:%M:%S")
 
     env = config.load()
+    try:
+        ai_service = configured_assistant(args, env)
+    except (ValueError, ProviderError, assistant.AssistantError) as exc:
+        log.error("%s", exc)
+        return 1
     args.ssid = args.ssid or config.resolve(env, "ssid")
     args.password = args.password or config.resolve(env, "password")
     args.wifi_interface = args.wifi_interface or config.resolve(env, "wifi_interface")
 
-    Handler.session = CameraSession(args)
+    Handler.session = CameraSession(args, workspace_root=args.state_dir)
+    Handler.session.assistant = ai_service
+    # UI-owned host preferences load explicitly at startup, not in test/session
+    # construction. A previously saved key is used only via the OS vault.
+    settings = Handler.session.host_settings
+    try:
+        if args.enable_ai:
+            # Preserve the explicitly chosen CLI/environment source in memory.
+            settings._key = ai_service._provider._key
+        prefs = settings.load()
+        if args.enable_ai and not settings.path.exists():
+            settings._prefs.update(enabled=True, budget_usd=args.ai_budget_usd,
+                                   request_limit=args.ai_request_limit, allow_lan=args.ai_lan)
+            prefs = settings.public()
+        Handler.session.assistant.configure(lambda: (
+            OpenAIProvider(settings.provider_key()) if prefs['enabled'] else None,
+            prefs['budget_usd'], prefs['request_limit']))
+        args.ai_lan = prefs['allow_lan']
+    except (ValueError, RuntimeError, OSError, ProviderError, assistant.AssistantError) as exc:
+        # A settings failure does not disable offline shot work or silently use
+        # a different secret. Host can inspect/reconfigure from the local UI.
+        Handler.session.assistant = assistant.Assistant()
+        settings._prefs['enabled'] = False
+        log.warning('AI host settings could not load; AI disabled')
     Handler.session.attach_core2()
     if args.autoconnect:
         Handler.session.connect()

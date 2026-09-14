@@ -36,14 +36,16 @@ body{
   touch-action:manipulation; display:flex; justify-content:center;
 }
 button,[role=button]{font:inherit;}
+button{margin:0;padding:0;border:0;background:none;color:inherit;text-align:inherit;
+       -webkit-appearance:none;appearance:none;}
 #app{width:100%; max-width:480px; height:100vh; height:100dvh; position:relative;
      overflow:hidden; display:flex; flex-direction:column;
      padding-top:env(safe-area-inset-top);}
 
 /* -------------------------------------------------------------- header --- */
-#hdr{flex:none; display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+#hdr{flex:none; display:grid; grid-template-columns:1fr 1fr; align-items:center;
      padding:10px 16px 4px; min-height:56px;}
-#hdr .rec{display:flex; align-items:center; gap:6px; font-size:10px; letter-spacing:.14em;}
+#hdr .rec{display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:10px; letter-spacing:.14em;}
 #hdr .rec i{width:8px; height:8px; border-radius:50%; background:var(--dim); flex:none;}
 #hdr .rec.on i{background:var(--warn); animation:beat 1.2s infinite;}
 #hdr .rec.on.confirmed i{background:var(--rec);}
@@ -54,9 +56,11 @@ button,[role=button]{font:inherit;}
 #hdr .fault{background:var(--fault); color:#000; padding:6px 10px; grid-column:1;}
 #hdr .fault b{display:block; font-size:10px; letter-spacing:.14em;}
 #hdr .fault span{font:500 13px/1.2 var(--mono);}
-#dots{display:flex; gap:6px; align-items:center; justify-content:center; padding:12px 8px;}
-#dots i{width:6px; height:4px; background:var(--edge); cursor:pointer; transition:width .15s;}
-#dots i.on{width:18px; background:#fff;}
+#dots{display:grid;grid-template-columns:repeat(3,1fr);grid-column:1/-1;grid-row:2;gap:8px;padding:12px 0 4px;}
+#dots button{min-height:44px;background:var(--panel);border:1px solid var(--edge);border-radius:8px;text-align:center;cursor:pointer;font-size:11px;}
+#dots button.on{border-color:var(--live);color:var(--live);}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--live);outline-offset:2px;}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;}}
 #hdr .cam{text-align:right; font:500 12px/1.5 var(--mono); color:var(--dim);}
 #hdr .cam b{font-weight:500;}
 
@@ -77,7 +81,7 @@ button,[role=button]{font:inherit;}
 #pic.rec.confirmed{border-color:var(--rec); border-style:solid;}
 #pic .label{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
             font:11px var(--mono); color:var(--faint); letter-spacing:.08em; text-align:center;}
-#pic .nolink{position:absolute; inset:0; display:grid; place-items:center;
+#pic .nolink{position:absolute; inset:0; display:grid; place-items:center;background:#11171d;
              text-align:center; padding:24px;}
 #pic .nolink .t1{font:500 13px var(--mono); color:var(--dim); letter-spacing:.1em; line-height:1.7;}
 #pic .nolink .t2{font-size:12px; color:var(--faint); margin:6px 0 16px; line-height:1.5;}
@@ -190,6 +194,10 @@ button,[role=button]{font:inherit;}
 #takeRow .v{font:700 10px var(--mono); padding:3px 6px;}
 #takeRow .v.clean{background:#0d2a14; color:#6ee787;} #takeRow .v.bad{background:#241c07; color:var(--warn);}
 #pastTakes .tk{display:flex; gap:10px; align-items:center; padding:6px 8px; font-size:11px; color:var(--faint);}
+#libRows{display:flex; flex-direction:column; gap:6px; flex:none;}
+.libRow{display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+        padding:6px 8px; background:var(--panel); font-size:11px; color:var(--dim);}
+.libRow .n{color:#fff; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 #compareOut{font:500 11px/1.5 var(--mono); padding:8px 10px;}
 #compareOut.matched{color:var(--ok); background:#0d1a10;}
 #compareOut.stab{color:var(--warn); background:#241c07;}
@@ -225,9 +233,8 @@ button,[role=button]{font:inherit;}
 .explain{font-size:12px; color:var(--dim); line-height:1.5;}
 .kv{display:flex; justify-content:space-between; font:500 13px var(--mono);}
 .kv .k{color:var(--dim);}
-#segFeel,#segLock,#segThumb{display:grid; border:2px solid #fff;}
+#segFeel,#segLock{display:grid; border:2px solid #fff;}
 #segFeel{grid-template-columns:1fr 1fr 1fr;} #segLock{grid-template-columns:1fr 1fr 1fr;}
-#segThumb{grid-template-columns:1fr 1fr;}
 .seg{height:40px; display:grid; place-items:center; font-size:10px; letter-spacing:.1em; cursor:pointer; color:#fff;}
 .seg + .seg{border-left:2px solid #fff;}
 .seg.on{background:#fff; color:#000; font-weight:700;}
@@ -267,7 +274,7 @@ a.link{color:var(--live);}
 <div id="app">
   <header id="hdr">
     <div class="rec" id="recBox"><i></i><span id="recWord">STBY</span><div class="t" id="recTime">00:00:00</div></div>
-    <div id="dots"><i data-go="0"></i><i data-go="1"></i><i data-go="2"></i></div>
+    <nav id="dots" aria-label="Phone workspaces"><button type="button" data-go="0">SHOOT</button><button type="button" data-go="1">MOVES</button><button type="button" data-go="2">SYSTEM</button></nav>
     <div class="cam"><div>CAM <b id="camBatt">--</b></div><div>LINK <span id="linkState">OFFLINE</span></div></div>
   </header>
 
@@ -285,9 +292,9 @@ a.link{color:var(--live);}
             <div id="reticle"><i></i></div>
           </div>
           <div id="toolsAndCap">
-            <div class="chip" id="chipIso">ISO --</div>
-            <div class="chip" id="chipShutter">1/--</div>
-            <div class="chip" id="chipWb">--K</div>
+            <button type="button" class="chip" id="chipIso">ISO --</button>
+            <button type="button" class="chip" id="chipShutter">1/--</button>
+            <button type="button" class="chip" id="chipWb">--K</button>
           </div>
           <div id="zoomTxt"></div>
           <div id="countdown"><div><div class="k">ROLLING · PRE-ROLL</div><div class="n" id="countN">3</div>
@@ -295,7 +302,7 @@ a.link{color:var(--live);}
           <div class="nolink hidden" id="noLink">
             <div><div class="t1" id="noLinkTitle">NO CAMERA</div>
             <div class="t2" id="noLinkBody">Pair once in SYSTEM. Approve on the camera screen if asked.</div>
-            <a id="noLinkGo">SYSTEM →</a></div>
+            <a id="noLinkGo" href="#system">SYSTEM →</a></div>
           </div>
         </div>
 
@@ -304,15 +311,15 @@ a.link{color:var(--live);}
           <div class="ro"><div class="k">TILT</div><div class="v" id="tiltTxt">--</div></div>
         </div>
         <div class="shootRow">
-          <div class="chip on" id="feelChip">FLUID</div>
-          <div class="chip" id="lockChip">LOCK</div>
+          <button type="button" class="chip on" id="feelChip">FLUID</button>
+          <button type="button" class="chip" id="lockChip">LOCK</button>
         </div>
 
         <div id="moveBox">
           <div class="hd"><span>MOVE</span><b id="moveSummary">—</b></div>
           <div id="moveState">NO CAMERA</div>
           <div class="actrow" id="moveActRow">
-            <div class="act arm" id="armBtn"><i></i><span>HOLD TO ARM</span></div>
+            <button type="button" class="act arm" id="armBtn"><i></i><span>HOLD TO ARM</span></button>
           </div>
         </div>
 
@@ -326,7 +333,7 @@ a.link{color:var(--live);}
             </svg>
             <div class="knob" id="knob"></div>
           </div>
-          <div id="capture">CAPTURE P1</div>
+          <button type="button" id="capture">CAPTURE P1</button>
         </div>
       </section>
 
@@ -337,67 +344,73 @@ a.link{color:var(--live);}
         <div id="wpEmpty">Frame a shot with the stick on SHOOT, then <b style="color:#fff">CAPTURE</b>.<br>Two or more points make a move.</div>
         <div id="wpList"></div>
         <div class="grid2 hidden" id="movesActRow2">
-          <div class="act arm" id="armBtn2"><i></i><span>HOLD TO ARM</span></div>
-          <div class="btnline" id="clearBtn">CLEAR</div>
+          <button type="button" class="act arm" id="armBtn2"><i></i><span>HOLD TO ARM</span></button>
+          <button type="button" class="btnline" id="clearBtn">CLEAR</button>
         </div>
         <div style="font-size:11px;letter-spacing:.14em;color:var(--warn)" id="moveState2"></div>
 
         <div class="hr hidden" id="betweenTakes">
           <div class="hrhead"><span>BETWEEN TAKES</span><span id="startChk">—</span></div>
           <div class="grid2">
-            <div class="btnline" id="backToOne">BACK TO ONE</div>
-            <div class="btnline" id="reReference">RE-REFERENCE</div>
+            <button type="button" class="btnline" id="backToOne">BACK TO ONE</button>
+            <button type="button" class="btnline" id="reReference">RE-REFERENCE</button>
           </div>
           <div class="retimerow"><span class="lab">RETIME</span>
-            <div class="retimebtn" data-retime=".5">½×</div>
-            <div class="retimebtn" data-retime=".75">0.75×</div>
-            <div class="retimebtn" data-retime="1.5">1.5×</div>
-            <div class="retimebtn" data-retime="2">2×</div>
+            <button type="button" class="retimebtn" data-retime=".5">½×</button>
+            <button type="button" class="retimebtn" data-retime=".75">0.75×</button>
+            <button type="button" class="retimebtn" data-retime="1.5">1.5×</button>
+            <button type="button" class="retimebtn" data-retime="2">2×</button>
           </div>
         </div>
 
         <div class="hr">
           <div class="hrhead"><span>TAKES · <span id="slate">—</span></span>
-            <div id="compareBtn">MATCH LAST TWO</div></div>
-          <div id="takeRow" class="hidden"></div>
+            <button type="button" id="compareBtn">MATCH LAST TWO</button></div>
+          <button type="button" id="takeRow" class="hidden"></button>
           <div id="pastTakes"></div>
           <div id="compareOut" class="hidden"></div>
-          <div id="logTake">LOG TAKE</div>
+          <button type="button" id="logTake">LOG TAKE</button>
         </div>
 
         <div class="hr">
           <div class="hrhead"><span>MOTION TIMELAPSE</span><span style="font:500 11px var(--mono);color:var(--dim)" id="lapseMode">shoot-move-shoot</span></div>
           <div id="lapseResume"><b>An interrupted timelapse can resume.</b><div id="lapseResumeText"></div><button id="lapseResumeBtn">RESUME</button></div>
           <div class="lapse3">
-            <div class="cell" id="lapseClipCell"><div class="k">CLIP</div><div class="v" id="lapseClip">8s</div></div>
-            <div class="cell" id="lapseFpsCell"><div class="k">AT</div><div class="v" id="lapseFps">25</div></div>
-            <div class="cell" id="lapseExpCell"><div class="k">EXPOSE</div><div class="v" id="lapseExp">0.5s</div></div>
+            <button type="button" class="cell" id="lapseClipCell"><div class="k">CLIP</div><div class="v" id="lapseClip">8s</div></button>
+            <button type="button" class="cell" id="lapseFpsCell"><div class="k">AT</div><div class="v" id="lapseFps">25</div></button>
+            <button type="button" class="cell" id="lapseExpCell"><div class="k">EXPOSE</div><div class="v" id="lapseExp">0.5s</div></button>
           </div>
           <div id="lapseSum">Cost it before you commit an afternoon.</div>
           <div class="grid2">
-            <div class="btnline" id="lapseCost">COST IT</div>
-            <div class="act lapse dim" id="lapseToggle">START</div>
+            <button type="button" class="btnline" id="lapseCost">COST IT</button>
+            <button type="button" class="act lapse dim" id="lapseToggle">START</button>
           </div>
+        </div>
+
+        <div class="hr">
+          <div class="hrhead"><span>LIBRARY</span><a class="link" href="/panel" style="font-size:10px">STUDIO &rarr;</a></div>
+          <div id="libEmpty" style="font-size:11px;color:var(--dim)">No saved shots. Save and load moves in Shot Studio.</div>
+          <div id="libRows"></div>
         </div>
       </section>
 
       <!-- =========================================================== SYSTEM === -->
       <section class="ws" data-name="system" id="wsSystem">
         <div class="hrhead" style="margin-top:4px"><span>CAMERA</span><span id="connState"></span></div>
-        <div id="connBtn">CONNECT</div>
+        <button type="button" id="connBtn">CONNECT</button>
         <div id="stages" class="hidden"></div>
         <div class="explain hidden" id="approveNote" style="padding:10px 12px;background:var(--warn);color:#000"></div>
 
         <div class="hr">
           <span class="syslabel">FEEL</span>
-          <div id="segFeel"><div class="seg" data-feel="news">CRISP</div><div class="seg" data-feel="fluid">FLUID</div><div class="seg" data-feel="glide">GLIDE</div></div>
+          <div id="segFeel"><button type="button" class="seg" data-feel="news">CRISP</button><button type="button" class="seg" data-feel="fluid">FLUID</button><button type="button" class="seg" data-feel="glide">GLIDE</button></div>
           <span class="syslabel">AXIS LOCK</span>
-          <div id="segLock"><div class="seg" data-lock="free">FREE</div><div class="seg" data-lock="pan">PAN ONLY</div><div class="seg" data-lock="tilt">TILT ONLY</div></div>
+          <div id="segLock"><button type="button" class="seg" data-lock="free">FREE</button><button type="button" class="seg" data-lock="pan">PAN ONLY</button><button type="button" class="seg" data-lock="tilt">TILT ONLY</button></div>
         </div>
 
         <div class="hr">
           <span class="syslabel">HAND</span>
-          <div id="segThumb"><div class="seg" data-thumb="left">LEFT THUMB</div><div class="seg" data-thumb="right">RIGHT THUMB</div></div>
+          <div class="explain">The centred touch stick works with either hand. Motion sensing is provided by the optional OsmoPalm controller, not this phone page.</div>
         </div>
 
         <div class="hr">
@@ -416,38 +429,44 @@ a.link{color:var(--live);}
           <div class="explain">ARM is refused below 10% when the browser reports a battery level. A move that dies mid-take is worse than one that never starts. Safari on iOS does not report battery level; this stays "not reported" there and the floor cannot apply.</div>
         </div>
 
-        <div class="hr"><a class="link" href="/panel" style="font-size:12px">&larr; engineering panel</a></div>
+        <div class="hr"><a class="link" href="/panel#rig" style="font-size:12px">Shot Studio / rig settings →</a></div>
       </section>
 
     </div>
   </div>
 
   <footer id="bottom">
-    <div id="stop">STOP</div>
-    <div id="recBtn"><i></i></div>
+    <button type="button" id="stop">STOP</button>
+    <button type="button" id="recBtn" aria-label="Request recording start or stop; verify camera"><i></i></button>
   </footer>
 </div>
 
 <div id="overlay"></div>
 <div id="sheet">
-  <div class="hd"><b id="sheetTitle"></b><span class="done" id="sheetDone">DONE</span></div>
+  <div class="hd"><b id="sheetTitle"></b><button type="button" class="done" id="sheetDone">DONE</button></div>
   <div id="sheetBody"></div>
 </div>
 <div id="toast"></div>
 
+<script src="/session.js"></script>
+<link rel="stylesheet" href="/ui.css">
+<link rel="stylesheet" href="/studio-settings.css">
+<link rel="stylesheet" href="/workspace-layout.css">
+<script src="/vendor/snapgrid.js"></script>
+<script src="/workspace-layout.js"></script>
+<script src="/studio-settings.js"></script>
+<script src="/ui.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const app = $("app");
 
 /* ---------------------------------------------------------------- fetch --- */
 async function post(path, body) {
-  try {
-    const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
-                                 body: JSON.stringify(body || {})});
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false) toast(j.error || `${path} failed`);
-    return j;
-  } catch (e) { toast("not connected"); return {ok:false, error:String(e)}; }
+  if (hostUnavailable && path !== "/api/stop") return {ok:false,error:"Host lost"};
+  const j=await OsmoSession.post(path,body);
+  if (j.ok===false) toast(j.error);
+  if (j.workspace?.warning) toast(j.workspace.warning);
+  return j;
 }
 let toastTimer = null;
 function toast(msg) {
@@ -460,7 +479,6 @@ const RAMP_LABEL = {news:"CRISP", fluid:"FLUID", glide:"GLIDE", direct:"CRISP", 
 const RAMP_CYCLE = ["news", "fluid", "glide"];
 const ui = {
   ws: 0, dragStartX: null, dragDX: 0,
-  thumb: localStorage.getItem("osmo_thumb") || "right",
   sheet: null, wpEdit: -1,
   lapse: {clip: 8, fps: 25, exp: 0.5, planned: false},
   phoneBatt: null, armHoldT: null, armHoldStart: 0,
@@ -479,9 +497,10 @@ if (navigator.getBattery) {
 const track = $("track"), viewport = $("viewport");
 function setWs(i, animate) {
   ui.ws = Math.max(0, Math.min(2, i));
-  track.style.transition = animate === false ? "none" : "transform .25s cubic-bezier(.2,.8,.2,1)";
+  track.style.transition = animate === false || matchMedia("(prefers-reduced-motion: reduce)").matches ? "none" : "transform .25s cubic-bezier(.2,.8,.2,1)";
   track.style.transform = `translateX(${-ui.ws * (100/3)}%)`;
-  [...$("dots").children].forEach((d, j) => d.classList.toggle("on", j === ui.ws));
+  [...$("dots").children].forEach((d, j) => { d.classList.toggle("on", j === ui.ws); d.setAttribute("aria-pressed", String(j === ui.ws)); });
+  if (ui.ws === 1) refreshLibrary();
 }
 $("dots").addEventListener("click", e => { const i = e.target.dataset.go; if (i != null) setWs(+i); });
 let swipeActive = false;
@@ -560,7 +579,11 @@ function wireArm(btn) {
   btn.addEventListener("pointerleave", cancel);
 }
 wireArm($("armBtn")); wireArm($("armBtn2"));
-$("clearBtn").onclick = () => post("/api/move", {waypoints: [], loop: false, ping_pong: false, name: "untitled"});
+function clearMove() {
+  if (!confirm("Clear the current move? This cannot be undone.")) return;
+  post("/api/move", {waypoints: [], loop: false, ping_pong: false, name: "untitled"});
+}
+$("clearBtn").onclick = clearMove;
 $("backToOne").onclick = () => post("/api/backtoone", {duration: 2.5});
 $("reReference").onclick = () => post("/api/move/reference", {});
 document.querySelectorAll("[data-retime]").forEach(b =>
@@ -584,15 +607,43 @@ $("compareBtn").onclick = async () => {
   const takes = r.takes || [];
   if (takes.length < 2) return toast("need two takes");
   const a = takes[takes.length - 2], b = takes[takes.length - 1];
-  const out = await post("/api/takes/compare", {first: a.id, second: b.id, fov_deg: 84});
+  // No hardcoded lens: the host already knows the field of view stated on
+  // each take's own setup, and reports which source it used and whether it
+  // had to assume one instead.
+  const out = await post("/api/takes/compare", {first: a.id, second: b.id});
   if (!out || !out.ok) return;
   const c = out.comparison;
   const el = $("compareOut");
   el.className = c.verdict === "matched" ? "matched" : c.verdict === "needs stabilise" ? "stab" : "no";
-  el.innerHTML = `<b>${c.verdict}</b> — ${c.takes[0]} vs ${c.takes[1]}: peak <b>${c.peak_px} px</b> (${c.peak_deg}°) at ${c.peak_at}s, rms ${c.rms_px} px. Assumes an 84° field of view — this is not your lens; set it in a future pass.`;
+  const fovNote = c.fov_assumed
+    ? `${c.fov_deg}° FOV assumed (house default) -- not this lens`
+    : `${c.fov_deg}° FOV from ${c.fov_source}`;
+  el.textContent = `${c.verdict} — ${c.takes[0]} vs ${c.takes[1]}: peak ${c.peak_px} px (${c.peak_deg}°) at ${c.peak_at}s, rms ${c.rms_px} px. ${fovNote}.`;
 };
 $("logTake").onclick = () => post("/api/take", {note: ""});
-$("takeRow").onclick = () => post("/api/take/circle");
+$("takeRow").onclick = () => {const id=LAST.takes?.at(-1)?.id;if(id!=null)post("/api/take/circle",{id});};
+
+/* --------------------------------------------------------- shot library --- */
+// Read-only here: authoring and loading a move onto the head happen in Shot
+// Studio, which already owns that editor. A second one on the phone would be
+// two places for a move to drift out of step with what the rig actually runs.
+async function refreshLibrary() {
+  let entries;
+  try { entries = (await (await fetch("/api/moves")).json()).moves || []; }
+  catch (e) { return; }
+  $("libEmpty").classList.toggle("hidden", entries.length > 0);
+  const rows = $("libRows");
+  if (rows.childElementCount !== entries.length) {
+    rows.innerHTML = entries.map(() =>
+      `<div class="libRow"><span class="n"></span><span></span></div>`).join("");
+  }
+  [...rows.children].forEach((row, i) => {
+    const e = entries[i];
+    row.querySelector(".n").textContent = e.name;
+    row.lastElementChild.textContent = `${e.waypoints} pts · ${e.duration}s`;
+  });
+}
+refreshLibrary();
 
 /* -------------------------------------------------------------- system --- */
 $("connBtn").onclick = () => { if (LAST.state === "connected") post("/api/disconnect"); else post("/api/connect"); };
@@ -601,9 +652,6 @@ document.querySelectorAll("[data-feel]").forEach(b => b.onclick = () => post("/a
 document.querySelectorAll("[data-lock]").forEach(b => b.onclick = () => {
   const v = b.dataset.lock;
   post("/api/clutch/lock", {tilt: v === "pan", pan: v === "tilt"});
-});
-document.querySelectorAll("[data-thumb]").forEach(b => b.onclick = () => {
-  ui.thumb = b.dataset.thumb; localStorage.setItem("osmo_thumb", ui.thumb); render(LAST);
 });
 $("lockChip").onclick = () => openSheet("lock-hint");
 
@@ -642,23 +690,65 @@ function frac(angle, axis) {
   return Math.max(0, Math.min(1, f));
 }
 
+let lastOkAt = 0;
+let hostUnavailable = false;
+function hostLost() {
+  hostUnavailable = true;
+  // A held stick, a hand still on the arm button and a spinning fill bar are
+  // all inputs the head can no longer hear. They stop here, not on the next
+  // successful poll -- by then a held stick would have kept posting stale
+  // intent for two silent seconds.
+  padRelease();
+  ui.padDirty = false; ui.padTilt = ui.padPan = 0;
+  clearTimeout(ui.armHoldT);
+  document.querySelectorAll(".act.arm i").forEach(i => {
+    i.style.transition = "none"; i.style.width = "0%";
+  });
+  // Re-using the existing "not ready" rendering path rather than a second
+  // one: every gate on motion and camera actions already keys off
+  // state/telemetry, so a state the render loop already treats as unready
+  // disables them all at once and clears any stale READY.
+  LAST = {...LAST, state: "offline", telemetry: false, armed: false, fault: null,
+          recording: {}, preroll: {}, timelapse: {}, pitch: null, yaw: null,
+          move: {...(LAST.move || {waypoints: []}), running: false, waiting_cue: null}};
+  render(LAST);
+}
 async function poll() {
   try {
-    const s = await (await fetch("/api/status")).json();
+    const r = await fetch("/api/status", {signal: AbortSignal.timeout(2000)});
+    if (!r.ok) throw new Error("status " + r.status);
+    const s = await r.json();
+    if(OsmoSession.isRetired(s))return;
+    OsmoSession.observe(s);
+    lastOkAt = Date.now();
+    hostUnavailable = false;
     LAST = s; render(s);
-  } catch (e) { /* keep last render; the LAN blipped */ }
+  } catch (e) {
+    // Never replays a queued command on recovery -- there is no queue. The
+    // next successful poll simply renders whatever the host actually holds.
+    if (Date.now() - lastOkAt > 2000) hostLost();
+  }
 }
 poll(); setInterval(poll, 300);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { padRelease(); clearTimeout(ui.armHoldT); return; }
+  if (Date.now() - lastOkAt > 2000) hostLost();
+  poll();
+});
 
 function render(s) {
-  const ready = s.state === "connected" && s.telemetry;
+  const ready = s.state === "connected" && s.telemetry && s.link_healthy !== false;
   const confirmed = false; // the camera never reports its tally over any implemented command
   const rec = s.recording || {};
 
   // header
   const recBox = $("recBox");
   recBox.classList.toggle("on", !!rec.on); recBox.classList.toggle("confirmed", confirmed);
-  $("recWord").textContent = rec.on ? "REC · UNCONFIRMED" : "STBY";
+  // Matches the wording on the cine monitor: a request was sent, not proof
+  // the camera is rolling.
+  $("recWord").textContent = hostUnavailable ? "UNKNOWN" : rec.on ? "REC REQUESTED" : "STBY";
+  $("recWord").title = rec.on
+    ? "request sent -- verify camera, this app cannot confirm recording" : "";
   if (rec.on && rec.since) $("recTime").textContent = fmt(Date.now()/1000 - rec.since);
   else $("recTime").textContent = "00:00:00";
   if (s.fault) { $("recBox").classList.add("hidden"); } else { $("recBox").classList.remove("hidden"); }
@@ -666,7 +756,8 @@ function render(s) {
   const pw = s.power || {};
   $("camBatt").innerHTML = pw.percent != null ? `${pw.percent}%${pw.charging ? " +" : ""}` : "--";
   const linkEl = $("linkState");
-  if (s.fault) { linkEl.textContent = "FAULT"; linkEl.style.color = "var(--fault)"; }
+  if (hostUnavailable) { linkEl.textContent = "HOST LOST"; linkEl.style.color = "var(--fault)"; }
+  else if (s.fault) { linkEl.textContent = "FAULT"; linkEl.style.color = "var(--fault)"; }
   else if (ready) { linkEl.textContent = "READY"; linkEl.style.color = "var(--ok)"; }
   else if (s.state === "connecting") { linkEl.textContent = (s.stage || "…").toUpperCase(); linkEl.style.color = "var(--warn)"; }
   else if (s.state === "error") { linkEl.textContent = "ERROR"; linkEl.style.color = "var(--fault)"; }
@@ -684,7 +775,8 @@ function render(s) {
   $("noLink").classList.toggle("hidden", ready);
   if (!ready) {
     let title = "NO CAMERA", body = "Pair once in SYSTEM. Approve on the camera screen if asked.";
-    if (s.fault) { title = "FAULT"; body = s.fault; }
+    if (hostUnavailable) { title = "HOST LOST"; body = "Restore the host connection. Camera state is unknown."; }
+    else if (s.fault) { title = "FAULT"; body = s.fault; }
     else if (s.state === "connecting") { title = (s.stage || "…").toUpperCase(); body = "Head is not armed until telemetry is fresh."; }
     else if (s.state === "error") { title = "LINK ERROR"; body = s.error || ""; }
     $("noLinkTitle").textContent = title; $("noLinkBody").textContent = body;
@@ -746,14 +838,14 @@ function render(s) {
     armBtn.classList.toggle("hidden", !showArm);
     armBtn.classList.toggle("dim", !ready || wps.length < 2);
     if (showRoll) {
-      const roll = document.createElement("div"); roll.className = "act roll"; roll.textContent = "● ROLL";
+      const roll = document.createElement("button"); roll.type = "button"; roll.className = "act roll"; roll.textContent = "● ROLL";
       roll.onclick = () => post("/api/move/roll", {});
-      const play = document.createElement("div"); play.className = "act play"; play.style.cssText = "flex:0 0 64px;height:44px;display:grid;place-items:center;font-size:11px;letter-spacing:.1em;cursor:pointer;border:2px solid #fff;color:#fff";
+      const play = document.createElement("button"); play.type = "button"; play.className = "act play"; play.style.cssText = "flex:0 0 64px;height:44px;display:grid;place-items:center;font-size:11px;letter-spacing:.1em;cursor:pointer;border:2px solid #fff;color:#fff";
       play.textContent = "PLAY"; play.onclick = () => post("/api/move/play", {});
       row.append(roll, play);
     }
     if (showGo) {
-      const go = document.createElement("div"); go.className = "act go"; go.textContent = "GO";
+      const go = document.createElement("button"); go.type = "button"; go.className = "act go"; go.textContent = "GO";
       go.onclick = () => post("/api/cue/go", {}); row.append(go);
     }
   }
@@ -805,7 +897,7 @@ function render(s) {
   $("startChk").className = atOne ? "at" : "off";
   $("backToOne").classList.toggle("dim", !wps.length || atOne);
   $("clearBtn").classList.toggle("dim", wps.length === 0);
-  $("clearBtn").onclick = wps.length ? () => post("/api/move", {waypoints: [], loop:false, ping_pong:false, name:"untitled"}) : null;
+  $("clearBtn").onclick = wps.length ? clearMove : null;
 
   // takes
   const takes = s.takes || [];
@@ -862,7 +954,6 @@ function render(s) {
   document.querySelectorAll("[data-feel]").forEach(b => b.classList.toggle("on", b.dataset.feel === s.ramp));
   const lockVal = cl.lock_tilt ? "pan" : cl.lock_pan ? "tilt" : "free";
   document.querySelectorAll("[data-lock]").forEach(b => b.classList.toggle("on", b.dataset.lock === lockVal));
-  document.querySelectorAll("[data-thumb]").forEach(b => b.classList.toggle("on", b.dataset.thumb === ui.thumb));
   $("ownerTxt").textContent = (s.owner || "none").toUpperCase();
   $("phoneBatt").textContent = ui.phoneBatt == null ? "not reported" : ui.phoneBatt + "%";
   $("phoneBatt").style.color = ui.phoneBatt != null && ui.phoneBatt < 10 ? "var(--rec)" : ui.phoneBatt != null && ui.phoneBatt < 30 ? "var(--warn)" : "var(--ok)";
@@ -881,12 +972,12 @@ function renderExposureSheet(s) {
   $("sheetTitle").textContent = "EXPOSURE";
   $("sheetBody").innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-      <div class="chip" id="isoCyc" style="height:56px">ISO ${cam.iso ?? "--"}</div>
-      <div class="chip" id="shCyc" style="height:56px">1/${cam.shutter ?? "--"}</div>
+      <button type="button" class="chip" id="isoCyc" style="height:56px">ISO ${cam.iso ?? "--"}</button>
+      <button type="button" class="chip" id="shCyc" style="height:56px">1/${cam.shutter ?? "--"}</button>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-      <div class="chip" id="wbCyc" style="height:56px">${cam.wb == null ? "AUTO" : cam.wb + "K"}</div>
-      <div class="chip" id="colCyc" style="height:56px">${(cam.color || "normal").toUpperCase()}</div>
+      <button type="button" class="chip" id="wbCyc" style="height:56px">${cam.wb == null ? "AUTO" : cam.wb + "K"}</button>
+      <button type="button" class="chip" id="colCyc" style="height:56px">${(cam.color || "normal").toUpperCase()}</button>
     </div>
     <div class="sheetnote" style="padding:8px 10px;background:#1a1408;color:#e3c07b">
       Exposure opcodes are unverified on this body and the camera never reports them back — every value above is what was last asked for, not what the camera is doing. Change one and watch the camera screen.
@@ -905,15 +996,15 @@ function renderWaypointSheet(s) {
   $("sheetBody").innerHTML = `
     <div style="font:500 12px var(--mono);color:var(--dim)">pan ${w.yaw.toFixed(1)}°  tilt ${w.pitch.toFixed(1)}°</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
-      <div class="chip" id="mvCyc" style="height:56px;flex-direction:column">MOVE ${w.duration}s</div>
-      <div class="chip" id="hdCyc" style="height:56px">HOLD ${holdLabel}</div>
-      <div class="chip" id="esCyc" style="height:56px">${w.easing === "linear" ? "LINEAR" : "SMOOTH"}</div>
+      <button type="button" class="chip" id="mvCyc" style="height:56px;flex-direction:column">MOVE ${w.duration}s</button>
+      <button type="button" class="chip" id="hdCyc" style="height:56px">HOLD ${holdLabel}</button>
+      <button type="button" class="chip" id="esCyc" style="height:56px">${w.easing === "linear" ? "LINEAR" : "SMOOTH"}</button>
     </div>
     <div class="sheetnote">HOLD → GO parks the head here until you press GO on MOVES. The clock freezes; the frame is held, not drifted.</div>
-    <div class="btnline" id="wpDel" style="border-color:var(--faint);color:var(--dim)">DELETE POINT</div>`;
+    <button type="button" class="btnline" id="wpDel" style="border-color:var(--faint);color:var(--dim)">DELETE POINT</button>`;
   const patch = (fn) => {
     const wps = s.move.waypoints.map((x,i) => i === ui.wpEdit ? {...x, ...fn(x)} : x);
-    post("/api/move", {waypoints: wps, loop: s.move.loop, ping_pong: s.move.ping_pong, name: s.move.name});
+    post("/api/move", {waypoints: wps, loop: s.move.loop, ping_pong: s.move.ping_pong, name: s.move.name, setup:s.setup, route_arcs:s.move.route_arcs !== false});
   };
   $("mvCyc").onclick = () => patch(x => ({duration: cycle([0.5,1,2,4,8,20], x.duration)}));
   $("hdCyc").onclick = () => {
@@ -924,9 +1015,19 @@ function renderWaypointSheet(s) {
   $("esCyc").onclick = () => patch(x => ({easing: x.easing === "linear" ? "ease-in-out-sine" : "linear"}));
   $("wpDel").onclick = () => {
     const wps = s.move.waypoints.filter((_,i) => i !== ui.wpEdit);
-    post("/api/move", {waypoints: wps, loop: s.move.loop, ping_pong: s.move.ping_pong, name: s.move.name});
+    post("/api/move", {waypoints: wps, loop: s.move.loop, ping_pong: s.move.ping_pong, name: s.move.name, setup:s.setup, route_arcs:s.move.route_arcs !== false});
     closeSheet();
   };
 }
 function x_cue_or_dwell(w) { return w.cue ? "GO" : w.dwell; }
+const mobileSafe=()=>!ui.padHeld&&!LAST.armed&&!LAST.move?.running&&!LAST.recording?.on;
+const mobileUtilities=document.createElement('div');$('wsSystem').prepend(mobileUtilities);
+createSurfaceUI({host:mobileUtilities,post,reload:()=>location.reload(),canArrange:mobileSafe});
+// The thumb pad, transport and tally stay fixed. System adjustment cards can
+// be arranged without competing with the established horizontal page gesture.
+const systemCards=[...$('wsSystem').querySelectorAll(':scope > .hr')];
+const systemDock=document.createElement('div');$('wsSystem').append(systemDock);
+systemCards.forEach(c=>systemDock.append(c));
+const mobileLayout=createWorkspaceLayout(systemDock,{id:'phone-system',canArrange:mobileSafe,panels:systemCards.map((element,i)=>({id:['feel','hand','tally','owner','battery','studio'][i],title:element.querySelector('.syslabel')?.textContent||'Studio',element,w:12,minH:1}))});
+mobileLayout.activate();
 </script>

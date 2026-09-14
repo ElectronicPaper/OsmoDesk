@@ -58,6 +58,24 @@ JPEG_QUALITY = 80
 PREVIEW_WIDTH = 960
 
 
+def decoder_capability():
+    """Inspect the installed decoder; no camera, stream or decoder thread starts."""
+    out = {'installed': False, 'hevc': False, 'version': None,
+           'profile': 'PyAV 18.1.0 / Python 3.11+',
+           'install_command': 'python -m pip install --only-binary=:all: -r requirements-live.txt',
+           'physical_stream_verified': False,
+           'note': 'Codec availability is not a live-camera decoding test.'}
+    try:
+        import av
+        out.update(installed=True, version=av.__version__)
+        out['hevc'] = av.codec.Codec('hevc', 'r').is_decoder
+    except Exception:
+        out['note'] = 'HEVC preview is unavailable. Offline authoring remains available.'
+    out['status'] = ('HEVC decoder installed; no camera stream tested' if out['hevc']
+                     else 'HEVC unavailable; offline authoring still works')
+    return out
+
+
 class LiveView:
     """Owns the decode thread and the most recent JPEG."""
 
@@ -238,10 +256,15 @@ class LiveView:
     _fps = 0.0
 
     def _decode_loop(self) -> None:
-        import av                      # imported here so the driver works without it
         import fractions
 
-        codec = av.CodecContext.create("hevc", "r")
+        try:
+            import av                  # optional host decoder, not a browser codec
+            codec = av.CodecContext.create("hevc", "r")
+        except Exception as exc:
+            self.error = f"Live view unavailable: install host PyAV with HEVC support ({type(exc).__name__}: {exc})"
+            log.error(self.error)
+            return
         # Encode with ffmpeg rather than Pillow. The old path pulled every
         # frame into a numpy RGB array and compressed it in Python, which at
         # 720p30 is ~80 MB/s of memory traffic plus a pure-Python encode --
@@ -344,6 +367,7 @@ class LiveView:
     def stats(self) -> dict:
         return {
             "running": self.running,
+            "error": self.error,
             "decoded": self.frames_decoded,
             "fps": self.fps,
             "width": self.width,
