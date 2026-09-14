@@ -1,0 +1,18 @@
+/* Loaded by the page that opts into workspace-layout.js.  No page is changed by
+ * this file alone; all selectors require the class added by activate(). */
+.osmo-workspace-layout { position: relative; display:block !important; min-width:0; padding:0; }
+.osmo-workspace-layout > .osmo-workspace-panel { position: absolute; box-sizing: border-box; max-width: 100%; margin:0; container-type:inline-size; }
+.osmo-workspace-layout > .osmo-workspace-panel.is-workspace-arranging { outline: 1px dashed color-mix(in srgb, currentColor 48%, transparent); outline-offset: 3px; }
+.osmo-workspace-toolbar { position: absolute; inset: 0 0 auto 0; z-index: 20; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font: 12px/1.25 system-ui, sans-serif; }
+.osmo-workspace-button { appearance: none; border: 1px solid #3b4f60; border-radius: 9px; min-height:40px; padding: 8px 12px; background:#15222d; color:#d8e6ef; font: inherit; cursor: pointer; }
+.osmo-workspace-button:disabled { opacity: .55; cursor: not-allowed; }
+.osmo-workspace-controls { position: relative; z-index: 21; display: flex; flex-wrap:wrap; gap: 6px; margin-top:16px; }
+.osmo-workspace-controls[hidden]{display:none}
+.osmo-workspace-controls button {touch-action:none;}
+.osmo-workspace-controls .osmo-workspace-button { box-shadow: 0 1px 3px #0006; }
+.osmo-workspace-help, .osmo-workspace-note { max-width: 36rem; }
+.osmo-workspace-note { min-height: 1em; }
+.osmo-workspace-tray { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+@media (max-width: 599px) { .osmo-workspace-toolbar { align-items: flex-start; } .osmo-workspace-layout > .osmo-workspace-panel { max-width: 100%; } }
+@container (max-width: 540px){.osmo-workspace-panel .row{flex-wrap:wrap}.osmo-workspace-panel input,.osmo-workspace-panel select{max-width:100%}.osmo-workspace-panel .ai-compose,.osmo-workspace-panel .ai-treatments{grid-template-columns:1fr}.osmo-workspace-panel .d-heading,.osmo-workspace-panel .ai-heading{flex-wrap:wrap}}
+@media (prefers-reduced-motion: reduce) { .osmo-workspace-layout > .osmo-workspace-panel { transition: none; } }

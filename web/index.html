@@ -5,38 +5,118 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0b0e11">
-<title>Osmo Pocket 4 Pro — Motion Control</title>
+<title>OsmoDesk — Shot Studio</title>
+<link rel="stylesheet" href="/ui.css">
+<link rel="stylesheet" href="/studio-settings.css">
+<link rel="stylesheet" href="/workspace-layout.css">
 <style>
   :root {
-    --bg:#0b0e11; --panel:#14181d; --sunk:#0f1317; --line:#242a32;
-    --text:#e8ebef; --dim:#8a939d; --faint:#5b636d;
-    --accent:#4ea1ff; --good:#3fb950; --warn:#d29922; --bad:#f85149;
-    --rec:#ff4d4d;
+    --bg:#0e1216; --panel:#171e25; --sunk:#10161c; --line:#34424f;
+    --text:#edf1f4; --dim:#b2c0ca; --faint:#a0adb8;
+    --accent:#8ed6dd; --amber:#efc17b; --cyan:#8ed6dd;
+    --good:#3fb950; --warn:#d29922; --bad:#f85149;
+    --rec:#ff4d4d; --ink:#0e1216; --slate:#202b34;
   }
   * { box-sizing:border-box; }
   /* Kill the double-tap zoom that otherwise fires while jogging the stick,
      without taking pinch-zoom away from anyone who needs it. */
   html { touch-action:manipulation; -webkit-text-size-adjust:100%; }
   body {
-    margin:0; padding:20px; background:var(--bg); color:var(--text);
-    font:13.5px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    margin:0; padding:28px; background:var(--bg); color:var(--text);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
   }
   .wrap { max-width:1240px; margin:0 auto; }
-  header { display:flex; align-items:baseline; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
-  h1 { font-size:17px; margin:0; font-weight:600; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:24px; flex-wrap:wrap; }
+  h1 { font-size:30px; letter-spacing:-.04em; margin:0; font-weight:650; }
+  header .brand{ margin-right:auto; }
+  header .brand p{ margin:2px 0 0; color:var(--dim); font-size:13px; }
   .tag { color:var(--faint); font-size:12px; }
   /* The two views are peers, and the operator has to be able to get from one
      to the other without knowing a URL. */
   .tomon{
-    margin-left:auto; padding:7px 14px; border-radius:8px; text-decoration:none;
-    background:var(--accent); color:#06101d; font-weight:700; font-size:12px;
+    display:inline-flex; align-items:center; min-height:44px; padding:8px 16px; border-radius:8px; text-decoration:none;
+    background:var(--slate); color:var(--text); border:1px solid var(--line); font-weight:600; font-size:13px;
     letter-spacing:.06em;
   }
   .tomon:hover{ background:#6bb2ff; }
-  .grid { display:grid; grid-template-columns:290px 1fr 300px; gap:16px; align-items:start; }
+
+  /* ---------- workspace navigation ----------
+     Four intentional surfaces share one page and one running engine: Compose
+     (offline authoring), Shoot (live control), Review (takes/telemetry) and
+     Rig (setup/diagnostics). Switching workspace only toggles which cards are
+     visible -- nothing here re-renders state or duplicates an id. */
+  .worknav{ display:flex; gap:8px; flex-wrap:wrap; margin:0 0 18px;
+    position:sticky; top:0; z-index:30; background:var(--bg); padding:10px 0; }
+  .worktab{
+    min-height:44px; padding:0 16px; border-radius:9px; border:1px solid var(--line);
+    background:var(--panel); color:var(--dim); font-weight:600; font-size:12.5px;
+    letter-spacing:.03em; cursor:pointer;
+  }
+  .worktab:hover{ color:var(--text); border-color:#544a3a; }
+  .worktab.on{ background:var(--slate); border-color:var(--amber); color:var(--amber); }
+  .worktab:focus-visible, a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, [tabindex]:focus-visible{
+    outline:2px solid var(--cyan); outline-offset:2px;
+  }
+  [data-workspace][hidden]{ display:none !important; }
+
+  /* ---------- next-action strip ----------
+     A single, honest sentence describing the next physical step for the
+     current workspace -- never a status dump, never a duplicate of a button
+     label. */
+  .nextaction{
+    display:block; line-height:1.6; min-height:44px;
+    padding:8px 14px; margin-bottom:14px; border-radius:9px;
+    background:var(--slate); border:1px solid var(--line);
+    color:var(--dim); font-size:12.5px;
+  }
+  .nextaction b{ color:var(--cyan); font-weight:600; }
+
+  /* ---------- persistent stop motion ----------
+     Physically distinct from "Stop recording": this only ever calls
+     /api/stop and never implies the camera has stopped rolling. */
+  .stopmotion{
+    min-height:44px; padding:0 18px; border-radius:9px;
+    background:#3a1414; border:1px solid var(--bad); color:#ffb3ac;
+    font-weight:700; letter-spacing:.04em; font-size:12.5px;
+  }
+  .stopmotion:hover:not(:disabled){ background:#4a1919; }
+
+  @media (max-width:1440px){ .wrap{ max-width:1240px; } }
+  .grid { display:grid; grid-template-columns:minmax(0,1.08fr) minmax(0,1fr); gap:20px; align-items:start; }
+  .grid > .col{ display:none; }
+  .grid > .card{ min-width:0; }
+  body[data-work="shoot"] .grid{ grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr); }
+  #monitorCard{ order:-3; }
+  #shootActions{ order:-2; }
+  #ctlCard{ order:-1; }
+  #takeCard{ order:-1; }
+  .advanced{ margin-top:18px; border-top:1px solid var(--line); }
+  .advanced > summary{ min-height:48px; padding:14px 0; color:var(--dim); cursor:pointer; font-weight:600; }
+  .advanced[open] > summary{ color:var(--cyan); }
+  .card .map{ margin:18px 0; background:var(--sunk); padding:16px; border-radius:10px; }
+  .card .wps{ max-height:none; }
+  .card .wp{ grid-template-columns:30px minmax(0,1fr); gap:10px; padding:16px 0; }
+  .card .wp > div:last-child{ grid-column:2; flex-direction:row !important; flex-wrap:wrap; }
+  .card .wp input.nm{ width:100%; font-size:16px; min-height:44px; }
+  .card .wp .pos{ display:flex; gap:12px; flex-wrap:wrap; margin:6px 0; }
+  .card .flow-tag{ min-height:44px; display:inline-flex; align-items:center; padding:8px; }
+  .card .zoomrow{ flex-wrap:wrap; }
+  .card label.f, .card .padnote, .card .legend{ font-size:12px; color:var(--dim); }
+  .card input[type="number"], .card select, .card input[type="text"]{ min-height:44px; max-width:100%; }
+  .card button, .card button.sm{ min-height:44px; font-size:13px; padding:9px 12px; }
+  .card .fgrid{ gap:14px; }
+  .card .lib-head{ flex-wrap:wrap; gap:8px; }
+  #nextAction{ border-left:3px solid var(--cyan); }
+  #hostBanner{ color:#ffd6a0; background:#362919; padding:12px 16px; margin-bottom:14px; border-radius:8px; }
+  #errBox{ position:sticky; top:76px; z-index:31; padding:14px; }
+  #previewRange{ width:100%; accent-color:var(--cyan); min-height:44px; }
+  #previewReadout{ color:var(--cyan); font-variant-numeric:tabular-nums; }
+  @media(max-width:900px){ body[data-work="shoot"] .grid{ grid-template-columns:1fr; } }
   @media (max-width:1100px){ .grid{ grid-template-columns:1fr 1fr; } }
   @media (max-width:720px){
     .grid{ grid-template-columns:1fr; }
+    #waypointCard{ order:-1; }
     body{ padding:12px; }
     /* On a phone the stick and GO are the two things you touch under
        pressure, so they get real target area. */
@@ -45,11 +125,17 @@
     button.sm{ padding:8px 10px; font-size:12.5px; }
     .pill{ padding:6px 11px; }
     #btnGo{ min-height:60px; font-size:19px; letter-spacing:.06em; }
+    .worktab{ flex:1 1 auto; text-align:center; padding:0 8px; }
+    .nextaction{ font-size:12px; }
+  }
+  @media (max-width:400px){
+    body{ padding:8px; }
+    .card{ padding:11px; }
   }
   .col { display:flex; flex-direction:column; gap:16px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px; }
   .card h2 {
-    font-size:11px; text-transform:uppercase; letter-spacing:.07em;
+    font-size:13px; text-transform:uppercase; letter-spacing:.08em;
     color:var(--dim); margin:0 0 11px; font-weight:600;
     display:flex; justify-content:space-between; align-items:center;
   }
@@ -140,6 +226,7 @@
   }
   .wp .pos{ font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--dim); }
   .wp .nm{ font-weight:600;font-size:12.5px; }
+  input.nm{ font-weight:600;font-size:12.5px;padding:3px 5px;margin-bottom:2px; }
   .wp-fields{ display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap; }
   label.f{ display:flex;align-items:center;gap:4px;font-size:11px;color:var(--faint); }
   input[type=number],select{
@@ -438,15 +525,33 @@
   }
   .fshud.hidden{ display:none; }
 </style>
+<link rel="stylesheet" href="/director.css">
+<link rel="stylesheet" href="/copilot.css">
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>Osmo Pocket 4 Pro</h1>
-      <a class="tomon" href="/cine">MONITOR &rarr;</a>
-      <a class="tomon" href="/mobile">PHONE &rarr;</a>
-    <span class="tag">motion control &middot; DUML over the camera datalink</span>
+    <div class="brand"><h1>OsmoDesk<span style="color:var(--cyan)">.</span></h1>
+      <p>SHOT STUDIO &nbsp; / &nbsp; Intentional movement. Repeatable shots.</p></div>
+    <a class="tomon" href="/cine">Cinema monitor ↗</a>
+    <a class="tomon" href="/mobile">Phone controls ↗</a>
   </header>
+
+  <nav class="worknav" id="workNav" aria-label="Shot Studio workspaces">
+    <button class="worktab" type="button" data-work="compose">Compose</button>
+    <button class="worktab" type="button" data-work="director">Director</button>
+    <button class="worktab" type="button" data-work="shoot">Shoot</button>
+    <button class="worktab" type="button" data-work="review">Review</button>
+    <button class="worktab" type="button" data-work="rig">Rig</button>
+    <span style="flex:1"></span>
+    <button class="stopmotion" type="button" id="btnStopMotion" title="Stops the gimbal move only — does not stop recording">Stop motion</button>
+  </nav>
+  <div class="nextaction" id="nextAction"></div>
+  <div id="hostBanner" role="status" hidden>HOST LOST — camera controls unavailable. Local edits are not saved.</div>
+  <div class="note bad hidden" id="workspaceWarn"></div>
+  <div id="conflictBanner" role="alert" hidden>Another tab changed this workspace. Your local edits have not overwritten it.
+    <div><button id="exportConflict">Export local draft</button><button id="reloadConflict">Reload host draft</button></div>
+  </div>
 
   <div class="bar" id="crew">
     <span class="pill"><b id="cBatt">&mdash;</b> battery</span>
@@ -459,9 +564,21 @@
   </div>
 
   <div class="grid">
+    <section id="directorPanel" class="director" data-workspace="director" hidden aria-label="Director rehearsal"></section>
+    <div class="card" id="shootActions" data-workspace="shoot">
+      <h2>Run this shot</h2><p class="tag">Enable motion deliberately. Roll requests recording, then starts the move after pre-roll.</p>
+      <div class="row" id="runControls"></div>
+      <details class="advanced"><summary>Position & rehearse</summary>
+        <div class="row"><select id="rehearsalPoint" aria-label="Rehearsal starting position"></select>
+        <button id="btnPosition" disabled>Go to position</button><button id="btnRehearse" disabled>Rehearse next leg</button></div>
+        <p class="note">These controls move the gimbal. Rehearsal does not replace the last full-shot take.</p>
+      </details>
+      <p class="note">Stop motion parks the gimbal. Use Stop recording separately, then log the take in Review.</p>
+      <details class="advanced"><summary>Run motion timelapse</summary><p class="note">Set timing in Compose's timelapse planner first. Only shoot-move-shoot can run.</p><div class="row" id="lapseRunControls"></div></details>
+    </div>
     <!-- ============ left: link + live ============ -->
     <div class="col">
-      <div class="card">
+      <div class="card" id="linkCard" data-workspace="rig">
         <h2>Link</h2>
         <div class="status"><span class="dot" id="dot"></span><span id="state">idle</span></div>
         <div class="row">
@@ -471,7 +588,7 @@
         <div class="note bad hidden" id="errBox"></div>
       </div>
 
-      <div class="card" id="ctlCard">
+      <div class="card" id="ctlCard" data-workspace="shoot">
         <h2><span>Live control</span>
           <button class="sm fsbtn" id="btnFsCtl" title="full screen with monitor">&#9974;</button>
         </h2>
@@ -510,7 +627,7 @@
           </div>
           <div class="fsrow">
             <span class="fslbl">zoom</span>
-            <input type="range" id="fsZoom" min="1" max="4" step="0.1" value="1">
+            <input type="range" id="fsZoom" min="1" max="12" step="0.1" value="1">
             <span class="fsval" id="fsZoomVal">1.0&times;</span>
           </div>
           <div class="fsrow">
@@ -518,7 +635,7 @@
                  it is the one control you must be able to reach instantly:
                  nothing plays back until it is set, and it is also how you
                  make the rig safe. Recenter is already in the row below. -->
-            <button class="sm" id="fsArm">Arm</button>
+            <button class="sm" id="fsArm">Enable motion</button>
             <button class="sm rec" id="fsRec">&#9679; Record</button>
           </div>
         </div>
@@ -530,7 +647,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" data-workspace="shoot">
         <h2>Exposure</h2>
         <div class="fgrid">
           <label class="f2">ISO<select id="selIso"></select></label>
@@ -554,7 +671,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" data-workspace="shoot">
         <h2>Camera</h2>
         <div class="row">
           <button class="rec" id="btnRec">● Record</button>
@@ -570,7 +687,7 @@
 
     <!-- ============ middle: the shot ============ -->
     <div class="col">
-      <div class="card" id="monitorCard">
+      <div class="card" id="monitorCard" data-workspace="shoot">
         <h2><span>Monitor</span>
           <span><span class="err-badge" id="mStats">&mdash;</span>
           <button class="sm fsbtn" id="btnFsMon" title="full screen">&#9974;</button></span>
@@ -610,24 +727,31 @@
         <div class="scopes" id="scopeRow"></div>
       </div>
 
-      <div class="card">
+      <div class="card" id="shotCard" data-workspace="compose">
         <h2>
           <span>Shot</span>
+          <span class="tag" id="saveState"></span>
           <span class="err-badge" id="dur">0.0s</span>
         </h2>
         <input type="text" id="moveName" placeholder="shot name" value="untitled">
 
         <div class="tl" id="tl"><div class="fill" id="tlFill"></div></div>
+        <div class="padnote" id="scrubNote">scrub the bar above to preview a
+          frame — <b>preview only</b>, nothing moves</div>
+        <label class="f" for="previewRange">Path preview <output id="previewReadout">0.0s</output></label>
+        <input id="previewRange" type="range" min="0" max="1000" value="0" aria-label="Preview shot time; does not move the camera">
         <div class="tlrow"><span id="tlNow">0.00s</span><span id="tlTot">0.00s</span></div>
 
         <div class="row" style="margin-top:10px">
-          <button id="btnArm">Arm</button>
+          <button id="btnArm">Enable motion</button>
           <button class="go hidden" id="btnGo">GO</button>
           <button class="primary" id="btnPlay" disabled>▶ Play</button>
           <button class="primary" id="btnRoll" disabled title="record, count, then play">● Roll</button>
           <button id="btnStop" disabled>■ Stop</button>
           <button class="sm" id="btnPreflight">Pre-flight</button>
           <button class="sm" id="btnCapture" disabled>+ Capture here</button>
+          <button class="sm" id="btnAddPos" title="Add a position offline — no
+connection needed. Starts inside the calibrated travel arc, pitch 90°, yaw 0°.">+ Add position</button>
           <label class="chk" title="Capture the next node as a pass-through
 instead of a mark, so the move does not come to rest there."><input
             type="checkbox" id="capFlow"> capture as FLOW</label>
@@ -703,6 +827,9 @@ knocked tripod.">Re-reference here</button>
             </select></label>
           </div>
           <div class="tl-sum" id="tlSum">Cost it before you commit an afternoon.</div>
+          <div class="tl-warn" id="tlContNote" hidden>Continuous timelapse is
+            cost/planning only on this rig — the host will not run it. Cost it
+            here, then switch to shoot-move-shoot to actually run the shoot.</div>
           <div id="tlResume"></div>
           <div id="tlWarn"></div>
           <div class="tl-bar" id="tlBar"><i id="lapseFill"></i></div>
@@ -727,8 +854,10 @@ knocked tripod.">Re-reference here</button>
         <input type="file" id="fileIn" accept=".json" class="hidden">
 
         <div class="lib">
-          <div class="lib-head">
+        <div class="lib-head">
             <span class="t">SHOT LIBRARY</span>
+            <input type="text" id="libSearch" placeholder="search saved shots"
+              style="max-width:150px" aria-label="search saved shots">
             <span style="flex:1"></span>
             <button class="sm" id="btnLibSave">Save to library</button>
             <button class="sm" id="btnLibRefresh">Refresh</button>
@@ -743,7 +872,7 @@ knocked tripod.">Re-reference here</button>
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" data-workspace="rig">
         <h2><span>Setup</span><span class="tag">recreates the frame, not just the angle</span></h2>
         <div class="fgrid">
           <label class="f2">Mount<input type="text" id="suMount" placeholder="clamp / suction / tripod"></label>
@@ -761,7 +890,7 @@ and every result says so.">FOV&deg;<input type="text" id="suFov"
         <input type="text" id="suNotes" placeholder="setup notes" style="margin-top:7px">
       </div>
 
-      <div class="card">
+      <div class="card" id="waypointCard" data-workspace="compose">
         <h2><span>Waypoints</span><span class="tag" id="wpCount">0</span></h2>
         <div class="wps" id="wps"></div>
         <div class="muted hidden" id="wpEmpty">
@@ -777,7 +906,7 @@ and every result says so.">FOV&deg;<input type="text" id="suFov"
 
     <!-- ============ right: readout ============ -->
     <div class="col">
-      <div class="card">
+      <div class="card" id="attitudeCard" data-workspace="review">
         <h2>Attitude</h2>
         <table>
           <tr><td>Pitch</td><td id="tPitch">—</td></tr>
@@ -786,7 +915,7 @@ and every result says so.">FOV&deg;<input type="text" id="suFov"
           <tr><td>Quaternion</td><td id="tQuat">—</td></tr>
         </table>
       </div>
-      <div class="card">
+      <div class="card" id="takeCard" data-workspace="review">
         <h2><span>Take log</span><button class="sm" id="btnExportData">Data</button><button class="sm" id="btnExportLog">Export</button></h2>
         <div class="fgrid">
           <label class="f2">Scene<input type="text" id="slScene" value="1"></label>
@@ -805,13 +934,13 @@ and every result says so.">FOV&deg;<input type="text" id="suFov"
           <span style="color:var(--faint)">vs</span>
           <select id="cmpB"></select>
           <label class="f">FOV <input type="number" id="cmpFov" step="1" min="1"
-            max="180" value="84">&deg;</label>
+            max="180" placeholder="Shot setup / house default">&deg;</label>
           <button class="sm" id="btnCompare">Compare</button>
         </div>
         <div class="cmp-out" id="cmpOut"></div>
       </div>
 
-      <div class="card">
+      <div class="card" data-workspace="rig">
         <h2>Session</h2>
         <table>
           <tr><td>SSID</td><td id="tSsid">—</td></tr>
@@ -826,36 +955,170 @@ and every result says so.">FOV&deg;<input type="text" id="suFov"
   </div>
 </div>
 
+<script src="/session.js"></script>
+<script src="/director.js"></script>
+<script src="/copilot.js"></script>
+<script src="/vendor/snapgrid.js"></script>
+<script src="/workspace-layout.js"></script>
+<script src="/studio-settings.js"></script>
+<script src="/ui.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let connected = false, running = false, recording = false;
+let recordingReported = false, recordingPending = null;
+let libEntries = [];
+let draftInitialized = false;
+let lastStatus = null, unsentDraft = false, draftQueue = Promise.resolve();
+let localTyping = false, localEditRevision = 0;
+let editingWaypoint = 0;
 let move = { name: "untitled", loop: false, ping_pong: false, waypoints: [] };
 let lastPitch = null, lastYaw = null;
 
 async function post(path, body) {
-  const r = await fetch(path, { method:"POST",
-    headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body||{}) });
-  const j = await r.json().catch(()=>({}));
-  if (!r.ok || j.ok === false) showError(j.error || ("HTTP " + r.status));
+  if (hostLost && path !== "/api/stop") return {ok:false,error:"Host lost — reconnect before sending changes"};
+  const j = await OsmoSession.post(path,body);
+  if (j.ok === false) showError(j.error);
+  if (j.workspace?.warning) showError(j.workspace.warning);
   return j;
 }
+
+// ---------- workspaces ----------
+// Four intentional surfaces over one running engine. Switching never
+// re-renders state or touches the host -- it only shows/hides cards that
+// already exist once each.
+const WORKSPACES = ["compose","director","shoot","review","rig"];
+// Reflow the existing cards, not their controls. The old column wrappers
+// otherwise leave most of the desktop empty when a workspace is selected.
+const studioGrid = document.querySelector(".grid");
+document.querySelectorAll(".grid > .col > .card").forEach(card => studioGrid.append(card));
+$("nextAction").after($("errBox"));
+$("errBox").setAttribute("role", "alert");
+$("wpEmpty").textContent = "Add positions to plan offline, or connect a camera to capture a frame. Start with two points.";
+for (const id of ["btnArm","btnGo","btnPlay","btnRoll","btnStop","btnBackToOne","btnReference","startChk"])
+  $("runControls").append($(id));
+for (const id of ["tlStart","tlStop","tlResume"]) $("lapseRunControls").append($(id));
+for (const [selector, title] of [[".btk", "Timing, trim & path export"], [".lapse", "Motion timelapse planner"]]) {
+  const node = $("shotCard").querySelector(selector), section = document.createElement("details");
+  section.className = "advanced";
+  const summary = document.createElement("summary"); summary.textContent = title;
+  node.before(section); section.append(summary, node);
+}
+const mapNode = $("shotCard").querySelector(".map");
+$("previewRange").after(mapNode);
+$("waypointCard").append($("shotCard").querySelector(".lib"));
+const positionTools = document.createElement("div"); positionTools.className = "row";
+positionTools.style.marginBottom = "16px";
+$("wps").before(positionTools);
+positionTools.append($("btnAddPos"), $("btnCapture"), $("capFlow").closest("label"));
+$("btnAddPos").classList.add("primary");
+$("btnSave").textContent = "Export JSON"; $("btnLoad").textContent = "Import JSON";
+const NEXT_ACTION = {
+  director: "Rehearse the timing offline. Preview and proposals never move the camera.",
+  compose: "Add or edit positions, then <b>Preview</b> the path — nothing here moves the head.",
+  shoot: "Connect, then compose at least two points to enable motion and run or roll.",
+  review: "Log a take, then compare it against another to check the match.",
+  rig: "Record the rig setup so a saved shot can be recreated later.",
+};
+let workspace = "compose";
+function setWorkspace(name) {
+  if (!WORKSPACES.includes(name)) name = "compose";
+  if (workspace === "shoot" && name !== "shoot") {
+    release(); nudgeStop(); Object.keys(keys).forEach(k => delete keys[k]);
+  }
+  if (workspace === "director" && name !== "director") window.director?.pause();
+  workspace = name;
+  document.body.dataset.work = name;
+  document.querySelectorAll("[data-workspace]").forEach(el => {
+    el.hidden = el.dataset.workspace !== name;
+  });
+  document.querySelectorAll(".worktab").forEach(b => {
+    b.classList.toggle("on", b.dataset.work === name);
+    b.setAttribute("aria-pressed", String(b.dataset.work === name));
+  });
+  $("nextAction").innerHTML = NEXT_ACTION[name];
+  try { localStorage.setItem("osmo.workspace", name); } catch (e) {}
+  if (name === "director" && draftInitialized) {window.director?.activate();window.copilot?.activate();}
+  window.refreshStudioLayout?.(name);
+}
+document.querySelectorAll(".worktab").forEach(b =>
+  b.onclick = () => setWorkspace(b.dataset.work));
+setWorkspace(location.hash.slice(1) || "compose");
+window.addEventListener("hashchange", () => setWorkspace(location.hash.slice(1)));
+
+// ---------- stop motion ----------
+// A single, permanent brake for the gimbal move. It never touches the
+// recording state — stopping the move and stopping the camera are two
+// different decisions.
+$("btnStopMotion").onclick = () => post("/api/stop");
+
+// ---------- host-loss ----------
+// A poll gap of ~2s means the host is unreachable, not merely busy. Camera
+// and motion controls go inert immediately rather than letting a stale
+// control queue a command that fires when the host returns.
+let lastPollOk = Date.now();
+let hostLost = false;
+function markHostLoss(lost) {
+  if (lost === hostLost) return;
+  hostLost = lost;
+  $("hostBanner").hidden = !lost;
+  document.querySelectorAll(
+    "#ctlCard button, #ctlCard input, #btnRec, #btnArm, #fsArm, #fsRec, .sector"
+  ).forEach(el => { el.disabled = lost; });
+  if (lost) {
+    release(); nudgeStop();
+    connected = false; tilt = pan = 0; dirty = false;
+    Object.keys(keys).forEach(k => delete keys[k]);
+    $("cLink").textContent = "HOST LOST"; $("cArm").textContent = "UNKNOWN";
+    for (const id of ["btnPlay","btnRoll","btnCapture","tlStart","btnGo","btnBackToOne","btnReference","btnPosition","btnRehearse"])
+      $(id).disabled = true;
+    showError("host connection lost — controls disabled");
+    $("cRec").textContent = "UNKNOWN"; $("fsState").textContent = "HOST LOST · camera state unknown";
+    $("fsHud").classList.remove("rec");
+  }
+}
+setInterval(() => { if (Date.now() - lastPollOk > 2000) markHostLoss(true); }, 500);
 function showError(m){
   const b = $("errBox"); b.textContent = m; b.classList.remove("hidden");
   clearTimeout(showError.t); showError.t = setTimeout(()=>b.classList.add("hidden"), 7000);
 }
-const pushMove = async () => {
-  const r = await post("/api/move", move);
-  refreshPath();          // the map follows what the host now holds
+const pushMove = () => {
+  localEditRevision++;
+  unsentDraft = true;
+  localTyping = false;
+  window.director?.invalidate();
+  const snapshot = JSON.parse(JSON.stringify(move));
+  draftQueue = draftQueue.catch(()=>{}).then(async () => {
+  $("saveState").textContent = "saving…"; $("saveState").className = "tag";
+  const r = await post("/api/move", snapshot);
+  if (r && r.ok !== false) {
+    unsentDraft = JSON.stringify(snapshot) !== JSON.stringify(move);
+    $("saveState").textContent = r.workspace?.durable ? "Draft saved on host" : "Host memory only — not saved to disk"; $("saveState").className = "tag";
+    await refreshPath();
+  } else {
+    $("saveState").textContent = "save failed — edits stay local";
+    $("saveState").className = "tag err-badge";
+  }
   return r;
+  });
+  return draftQueue;
 };
+window.addEventListener("beforeunload", e => {
+  if (unsentDraft) { e.preventDefault(); e.returnValue = ""; }
+});
 
 // ---------- waypoint list ----------
 function renderWaypoints(activeIdx) {
+  editingWaypoint=Math.max(0,Math.min(editingWaypoint,move.waypoints.length-1));
   const box = $("wps"); box.innerHTML = "";
   $("wpCount").textContent = move.waypoints.length;
   $("wpEmpty").classList.toggle("hidden", move.waypoints.length > 0);
 
   const last = move.waypoints.length - 1;
+  const selected = $("rehearsalPoint").value;
+  $("rehearsalPoint").replaceChildren(...move.waypoints.map((w, i) => {
+    const o = document.createElement("option"); o.value = i; o.textContent = `P${i + 1} · ${w.name}`; return o;
+  }));
+  if (+selected <= last) $("rehearsalPoint").value = selected;
   move.waypoints.forEach((w, i) => {
     // Only interior nodes can flow. The ends of a move are held at rest by the
     // sampler whatever the flag says, so offering the toggle there would show
@@ -866,10 +1129,14 @@ function renderWaypoints(activeIdx) {
     el.innerHTML = `
       <div class="idx">${String.fromCharCode(65+i)}</div>
       <div>
-        <div class="nm">${w.name || ("wp"+(i+1))}</div>
-        <div class="pos">pitch ${w.pitch.toFixed(1)}°  yaw ${w.yaw.toFixed(1)}°</div>
+        <input type="text" class="nm" data-i="${i}" data-k="name" placeholder="wp${i+1}">
+        <div class="pos"><label class="f">pitch <input type="number" step="0.1"
+            value="${w.pitch.toFixed(1)}" data-i="${i}" data-k="pitch"
+            style="width:56px">&deg;</label> <label class="f">yaw
+            <input type="number" step="0.1" value="${w.yaw.toFixed(1)}"
+            data-i="${i}" data-k="yaw" style="width:56px">&deg;</label></div>
         <div class="wp-fields">
-          ${i > 0 ? `<label class="f">move <input type="number" step="0.1" min="0.1"
+          ${i > 0 ? `<label class="f">move <input type="number" step="0.05" min="0.05"
               value="${w.duration}" data-i="${i}" data-k="duration">s</label>` : ""}
           <label class="f">hold <input type="number" step="0.1" min="0"
               value="${w.dwell}" data-i="${i}" data-k="dwell">s</label>
@@ -884,21 +1151,38 @@ through at speed, so the move does not stutter at every node.">${w.flow ? "FLOW"
                  title="A move has to start and end at rest to be repeatable.">STOP</span>`}
         </div>
         <div class="zoomrow ${w.zoom == null ? 'unset' : ''}">
-          <label class="f">zoom <input class="zoomv" type="number" step="0.05"
+          <label class="f">zoom (planned only)<input class="zoomv" type="number" step="0.05"
             min="0" max="1" placeholder="--" value="${w.zoom == null ? '' : w.zoom}"
             data-i="${i}" data-k="zoom"
-            title="Blank leaves the lens alone at this node."></label>
+            title="Recorded on the node and exported with the shot, but not
+driven during playback yet. Blank leaves the lens alone at this node."></label>
           <select data-i="${i}" data-k="zoom_easing"></select>
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:4px">
-        <button class="sm" data-goto="${i}">Go</button>
-        ${i < last ? `<button class="sm" data-seg="${i}"
+        <button class="sm hidden" data-goto="${i}">Go</button>
+        ${i < last ? `<button class="sm hidden" data-seg="${i}"
             title="Rehearse from here to the next node. The full move is left
 alone — the next Play is still the shot.">Run&nbsp;&rarr;</button>` : ""}
+        <button class="sm" data-dup="${i}" title="Duplicate this position">&#10697;</button>
+        ${i > 0 ? `<button class="sm" data-up="${i}" title="Move earlier">&uarr;</button>` : ""}
+        ${i < last ? `<button class="sm" data-down="${i}" title="Move later">&darr;</button>` : ""}
         <button class="sm" data-del="${i}">✕</button>
       </div>`;
     box.appendChild(el);
+
+    // Set as a property, never interpolated into the template string above:
+    // a waypoint name is free text an operator typed, and this is the one
+    // field in this render that must never become markup.
+    el.querySelector(".nm").value = w.name || "";
+    const editor=document.createElement('div');editor.className='wp-editor';editor.id=`wp-editor-${i}`;
+    while(el.firstChild)editor.append(el.firstChild);
+    const summary=document.createElement('button');summary.type='button';summary.className='wp-summary';summary.dataset.edit=i;
+    summary.setAttribute('aria-controls',editor.id);summary.setAttribute('aria-expanded',String(i===editingWaypoint));
+    const title=document.createElement('span');title.textContent=`P${i+1} · ${w.name||'Untitled beat'}`;
+    const pace=document.createElement('small');pace.textContent=`${i?Number(w.duration).toFixed(1)+'s travel':'Start'}${w.dwell?' · '+w.dwell+'s hold':''}${w.cue?' · Cue':''} ▾`;
+    summary.append(title,pace);editor.hidden=i!==editingWaypoint;el.append(summary,editor);
+    summary.onclick=()=>{editingWaypoint=i;box.querySelectorAll('.wp-summary').forEach(b=>b.setAttribute('aria-expanded',String(+b.dataset.edit===i)));box.querySelectorAll('.wp-editor').forEach((e,j)=>e.hidden=j!==i);};
 
     const sel = el.querySelector("select[data-k=easing]");
     if (sel) {
@@ -927,6 +1211,14 @@ alone — the next Play is still the shot.">Run&nbsp;&rarr;</button>` : ""}
       const w = move.waypoints[+inp.dataset.i], k = inp.dataset.k;
       if (k === "easing" || k === "zoom_easing") {
         w[k] = inp.value;
+      } else if (k === "name") {
+        w.name = inp.value;
+        inp.closest('.wp').querySelector('.wp-summary span').textContent=`P${+inp.dataset.i+1} · ${w.name||'Untitled beat'}`;
+      } else if (k === "pitch" || k === "yaw") {
+        // No artificial floor here -- 0 is a perfectly legal pitch or yaw,
+        // unlike duration/hold which must stay positive to mean anything.
+        const v = +inp.value;
+        w[k] = Number.isFinite(v) ? v : 0;
       } else if (k === "cue") {
         w[k] = inp.checked;
       } else if (k === "zoom") {
@@ -936,7 +1228,7 @@ alone — the next Play is still the shot.">Run&nbsp;&rarr;</button>` : ""}
                : Math.min(1, Math.max(0, +inp.value));
         inp.closest(".zoomrow").classList.toggle("unset", w.zoom == null);
       } else {
-        w[k] = Math.max(k === "dwell" ? 0 : 0.1, +inp.value);
+        w[k] = Math.max(k === "dwell" ? 0 : 0.05, +inp.value);
       }
       pushMove(); renderTimeline();
     };
@@ -951,6 +1243,9 @@ alone — the next Play is still the shot.">Run&nbsp;&rarr;</button>` : ""}
     };
   });
   box.querySelectorAll("[data-flow]").forEach(t => {
+    t.setAttribute("role", "button"); t.tabIndex = 0;
+    t.setAttribute("aria-label", "Toggle flow through this position");
+    t.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); t.click(); } };
     t.onclick = () => {
       const w = move.waypoints[+t.dataset.flow];
       w.flow = !w.flow;
@@ -963,7 +1258,29 @@ alone — the next Play is still the shot.">Run&nbsp;&rarr;</button>` : ""}
   box.querySelectorAll("[data-del]").forEach(b => {
     b.onclick = () => { move.waypoints.splice(+b.dataset.del,1); pushMove(); renderWaypoints(); renderTimeline(); };
   });
-  $("btnPlay").disabled = !connected || move.waypoints.length < 2 || running;
+  box.querySelectorAll("[data-dup]").forEach(b => {
+    b.onclick = () => {
+      const i = +b.dataset.dup;
+      const copy = { ...move.waypoints[i], name: move.waypoints[i].name + " copy" };
+      move.waypoints.splice(i + 1, 0, copy);
+      pushMove(); renderWaypoints(); renderTimeline();
+    };
+  });
+  box.querySelectorAll("[data-up]").forEach(b => {
+    b.onclick = () => {
+      const i = +b.dataset.up;
+      [move.waypoints[i - 1], move.waypoints[i]] = [move.waypoints[i], move.waypoints[i - 1]];
+      pushMove(); renderWaypoints(); renderTimeline();
+    };
+  });
+  box.querySelectorAll("[data-down]").forEach(b => {
+    b.onclick = () => {
+      const i = +b.dataset.down;
+      [move.waypoints[i], move.waypoints[i + 1]] = [move.waypoints[i + 1], move.waypoints[i]];
+      pushMove(); renderWaypoints(); renderTimeline();
+    };
+  });
+  $("btnPlay").disabled = !connected || !armed || move.waypoints.length < 2 || running;
   $("btnRoll").disabled = $("btnPlay").disabled;
 }
 
@@ -1050,8 +1367,21 @@ async function loadPresets() {
 
 async function poll() {
   let s;
-  try { s = await (await fetch("/api/status")).json(); } catch(e){ return; }
-  connected = s.state === "connected";
+  try {
+    const response = await fetch("/api/status", {signal:AbortSignal.timeout(1800)});
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    s = await response.json();
+    if (!s.state || !s.move) throw new Error("invalid host status");
+  } catch(e){ return; }
+  if(OsmoSession.isRetired(s))return;
+  if (OsmoSession.observe(s,{dirty:unsentDraft || localTyping})) {
+    draftInitialized=false;
+    window.director?.invalidate();
+  }
+  lastStatus = s;
+  lastPollOk = Date.now();
+  markHostLoss(false);
+  connected = s.state === "connected" && s.link_healthy !== false;
   $("state").textContent = s.state + (s.stage ? " — " + s.stage : "");
   $("dot").className = "dot " + s.state;
   $("btnConnect").disabled = connected || s.state === "connecting";
@@ -1085,10 +1415,25 @@ async function poll() {
     .toggle("low", !!(pw && pw.percent != null && pw.percent < 20));
   // Two record buttons and two zoom sliders now exist -- the card ones and the
   // full-screen ones. They must never disagree about what the camera is doing.
-  $("fsRec").classList.toggle("armed", recording);
-  $("fsRec").innerHTML = recording ? "■ Recording" : "● Record";
-  $("cRec").textContent = recording ? "REC" : "idle";
-  $("cRecWrap").classList.toggle("rec", recording);
+  // Truthful telemetry: this camera never reports tally back, so "reported"
+  // stays false until the host itself claims otherwise. The label says
+  // "requested" or "verify camera" rather than implying a confirmed roll.
+  const rec = s.recording || {};
+  recording = !!rec.on;
+  recordingReported = !!rec.reported;
+  if (recordingPending !== null && recording === recordingPending) recordingPending = null;
+  const recDisplayOn = recordingPending !== null ? recordingPending : recording;
+  const recLabel = recordingPending !== null
+    ? "Record requested…"
+    : (recording ? (recordingReported ? "■ Recording" : "Recording — verify camera")
+                 : "● Record");
+  $("btnRec").classList.toggle("armed", recDisplayOn);
+  $("btnRec").textContent = recording ? "■ Stop recording" : recLabel;
+  $("fsRec").classList.toggle("armed", recDisplayOn);
+  $("fsRec").innerHTML = recLabel;
+  $("cRec").textContent = recordingPending !== null ? "request pending"
+    : (recording ? (recordingReported ? "REC reported" : "REC requested · verify camera") : "no REC request");
+  $("cRecWrap").classList.toggle("rec", recDisplayOn);
   $("cPitch").textContent = s.pitch == null ? "\u2014" : s.pitch.toFixed(1) + "\u00b0";
   $("cYaw").textContent = s.yaw == null ? "\u2014" : s.yaw.toFixed(1) + "\u00b0";
   $("cLink").textContent = connected ? "up" : s.state;
@@ -1099,10 +1444,10 @@ async function poll() {
   armed = !!s.armed;
   $("cArm").textContent = armed ? "ARMED" : "SAFE";
   $("cArmWrap").classList.toggle("armed", armed);
-  $("btnArm").textContent = armed ? "Disarm" : "Arm";
+  $("btnArm").textContent = armed ? "Disable motion" : "Enable motion";
   // Alongside the card button, not before `armed` is refreshed above -- read
   // any earlier and the full-screen label shows the previous poll's state.
-  $("fsArm").textContent = armed ? "Disarm" : "Arm";
+  $("fsArm").textContent = armed ? "Disable motion" : "Enable motion";
   $("fsArm").classList.toggle("primary", !armed);
   $("btnArm").classList.toggle("primary", !armed);
   $("disarmNote").classList.toggle("hidden", armed || !s.disarm_reason || !connected);
@@ -1129,11 +1474,11 @@ async function poll() {
     ? `${lv.width || "?"}\u00d7${lv.height || "?"}  ${lv.fps || 0} fps` +
       (lv.dropped_incomplete ? `  \u00b7 ${lv.dropped_incomplete} lost` : "")
     : "no feed";
-  if (lv.running && !lv.have_frame) $("noFeed").textContent = "decoding\u2026";
+  if (!lv.have_frame) $("noFeed").textContent = lv.error || (lv.running ? "Decoding…" : connected ? "Live view unavailable" : "Connect a camera in Rig for live view");
 
   if (!$("fsHud").classList.contains("hidden")) {
     $("fsState").textContent =
-      (armed ? "ARMED" : "SAFE") + (recording ? " REC" : "") +
+      (armed ? "ARMED" : "SAFE") + (recording ? " REC REQUESTED" : "") +
       (running ? " MOVING" : "");
     $("fsAtt").textContent =
       (s.pitch == null ? "--" : s.pitch.toFixed(1) + "°") + "  " +
@@ -1222,10 +1567,45 @@ async function poll() {
     : "uncalibrated";
   $("tLimits").textContent = room(LIM.pitch);
   $("tYawLimits").textContent = room(LIM.yaw);
+  if (s.speed_preset && document.activeElement?.className !== "spd")
+    setSpeedUI(s.speed_preset);
+  const ws = s.workspace || {};
+  $("workspaceWarn").classList.toggle("hidden", !ws.warning);
+  if (ws.warning) $("workspaceWarn").textContent = ws.warning;
+  if (!unsentDraft) $("saveState").textContent = ws.warning ? "Not saved — see warning"
+    : ws.enabled ? (ws.revision > 0 ? "Draft saved on host" : "Ready to save on host") : "Draft in host memory";
 
   const m = s.move;
+  $("btnPosition").disabled = !connected || !armed || running || !move.waypoints.length;
+  $("btnRehearse").disabled = !connected || !armed || running || +$("rehearsalPoint").value >= move.waypoints.length - 1;
   if (m) {
+    // Seed the local draft from the host once, on the first status this page
+    // ever sees -- so a reload picks up the persisted draft rather than
+    // starting blank. Never again after that: every later poll must not
+    // stomp on edits the operator is mid-way through.
+    if (!draftInitialized) {
+      draftInitialized = true;
+      move = { name: m.name || "untitled", loop: !!m.loop, ping_pong: !!m.ping_pong,
+               route_arcs:m.route_arcs !== false, setup:s.setup || {}, waypoints: m.waypoints || [] };
+      $("moveName").value = move.name;
+      $("optLoop").checked = move.loop;
+      $("optPing").checked = move.ping_pong;
+      renderWaypoints(); renderTimeline(); refreshPath();
+      if(workspace==='director')window.director?.activate();
+    }
     running = m.running;
+    const count = Math.max(0, Math.ceil((s.preroll?.until || 0) - Date.now()/1000));
+    if (workspace === "shoot") $("nextAction").textContent = !connected
+      ? "Camera disconnected. Open Rig to connect; Compose works offline."
+      : count ? `Recording requested · move begins in ${count}s · verify camera tally`
+      : m.waiting_cue != null ? "Holding for your cue. Press GO when the action is ready."
+      : running ? "Shot running. Stop motion parks the head; recording is a separate control."
+      : m.fault ? m.fault
+      : !armed ? "Ready to rehearse? Enable motion first. This is a deliberate safety gate."
+      : s.start_check?.known && !s.start_check.at_start ? "Return to P1 with Back to one before running the shot."
+      : "Run a rehearsal with Play, or request recording and pre-roll with Roll.";
+    for (const id of ["btnArm","fsArm","btnBackToOne","btnReference"])
+      $(id).disabled = !connected;
     $("btnStop").disabled = !running;
     $("btnPlay").disabled = !connected || !armed || move.waypoints.length < 2 || running;
     $("btnRoll").disabled = $("btnPlay").disabled;
@@ -1266,33 +1646,47 @@ $("btnCapture").onclick = async () => {
   const r = await post("/api/waypoint", { flow: $("capFlow").checked });
   if (r.waypoint) { move.waypoints.push(r.waypoint); renderWaypoints(); renderTimeline(); }
 };
+
+// Works with no host connection at all: P1..Pn start level and legal
+// (pitch 0°, yaw 0°) and every field is editable from there, so a shot can
+// be blocked out before the rig is even on.
+$("btnAddPos").onclick = () => {
+  move.waypoints.push({
+    name: "P" + (move.waypoints.length + 1), pitch:90, yaw:Math.min(30, move.waypoints.length * 10),
+    duration: 3, dwell: 0, easing: "ease-in-out-sine", zoom: null,
+    zoom_easing: "ease-in-out-sine", flow: false, cue: false,
+  });
+  pushMove(); renderWaypoints(); renderTimeline();
+};
 $("btnRoll").onclick = async () => {
+  const saved = await pushMove(); if (!saved.ok) return;
   const r = await post("/api/move/roll", {});
-  if (r && !r.ok) alert(r.error || "could not roll");
+  if (r && !r.ok) showError(r.error || "could not roll");
 };
 $("btnPlay").onclick = async () => {
-  await pushMove();
+  const saved = await pushMove(); if (!saved.ok) return;
   if ($("autoRec").checked && !recording) await toggleRecord(true);
   await post("/api/move/play");
 };
 $("btnStop").onclick = async () => {
-  await post("/api/move/stop");
-  if ($("autoRec").checked && recording) {
-    await toggleRecord(false);
-    await post("/api/take", { note: $("takeNote").value });
-    $("takeNote").value = "";
-  }
+  await post("/api/stop");
 };
-$("btnClear").onclick = () => { move.waypoints = []; pushMove(); renderWaypoints(); renderTimeline(); };
+$("btnClear").onclick = () => {
+  if (move.waypoints.length &&
+      !confirm("Clear all positions from this shot? This cannot be undone.")) return;
+  move.waypoints = []; pushMove(); renderWaypoints(); renderTimeline();
+};
 $("moveName").onchange = e => { move.name = e.target.value || "untitled"; pushMove(); };
 $("optLoop").onchange = e => { move.loop = e.target.checked; pushMove(); };
 $("optPing").onchange = e => { move.ping_pong = e.target.checked; pushMove(); };
 
 async function toggleRecord(on) {
-  recording = on;
-  $("btnRec").classList.toggle("armed", on);
-  $("btnRec").textContent = on ? "■ Recording" : "● Record";
-  await post("/api/action", { name: on ? "record_start" : "record_stop" });
+  // Optimistic only for the label: "requested", never "recording" — the
+  // camera never reports tally back, so the poll below is what actually
+  // confirms or reverts this.
+  recordingPending = on;
+  const r = await post("/api/action", { name: on ? "record_start" : "record_stop" });
+  if (!r || r.ok === false) recordingPending = null;   // failed: leave prior state
 }
 $("btnRec").onclick = () => toggleRecord(!recording);
 
@@ -1304,7 +1698,8 @@ $("btnRec").onclick = () => toggleRecord(!recording);
 // bit". Everything here exists so that request takes one click.
 async function afterMoveEdit() {
   const s = await (await fetch("/api/status")).json();
-  move.waypoints = s.move.waypoints;
+  move = {name:s.move.name, waypoints:s.move.waypoints, loop:s.move.loop,
+    ping_pong:s.move.ping_pong, route_arcs:s.move.route_arcs !== false, setup:s.setup || {}};
   renderWaypoints(); renderTimeline(); refreshPath();
 }
 
@@ -1395,8 +1790,15 @@ function tlShowPlan(plan) {
     el.textContent = w;
     box.appendChild(el);
   }
-  $("tlStart").disabled = !connected || !armed || running;
+  $("tlStart").disabled = !connected || !armed || running ||
+    $("tlMode").value === "continuous";
 }
+
+$("tlMode").onchange = () => {
+  const cont = $("tlMode").value === "continuous";
+  $("tlStart").disabled = $("tlStart").disabled || cont;
+  $("tlContNote").hidden = !cont;
+};
 
 $("tlPlan").onclick = async () => {
   await pushMove();
@@ -1456,7 +1858,8 @@ function tlProgress(t) {
   const bar = $("tlBar");
   bar.classList.toggle("on", !!t.running);
   $("tlStop").disabled = !t.running;
-  $("tlStart").disabled = t.running || !connected || !armed;
+  $("tlStart").disabled = t.running || !connected || !armed ||
+    $("tlMode").value === "continuous";
   if (t.frames) {
     $("lapseFill").style.width = (100 * t.frame / t.frames).toFixed(1) + "%";
   }
@@ -1559,6 +1962,14 @@ function pathMapDraw() {
     g.fillStyle = "#8d969d";
     g.beginPath(); g.arc(pt.x, pt.y, 3, 0, Math.PI * 2); g.fill();
   }
+
+  // The scrub ghost, cyan and hollow so it never reads as "this is where the
+  // head is" -- it is only where the timeline cursor was dragged to.
+  if (scrubGhost) {
+    const pt = place(scrubGhost[0], scrubGhost[1]);
+    g.strokeStyle = "#5fc7d6"; g.lineWidth = 2;
+    g.beginPath(); g.arc(pt.x, pt.y, 6, 0, Math.PI * 2); g.stroke();
+  }
 }
 
 // The path comes from the host, sampled by the same code that will play it.
@@ -1567,6 +1978,8 @@ function pathMapDraw() {
 // and the day those drift, the map draws a move that will not be played.
 let pathPoints = [];
 let pathPending = false;
+let pathDuration = 0;
+let scrubGhost = null;      // [pitch, yaw] under the scrub cursor, preview only
 
 async function refreshPath() {
   if (pathPending) return;
@@ -1574,13 +1987,40 @@ async function refreshPath() {
   try {
     const r = await fetch("/api/move/path").then(x => x.json());
     pathPoints = r.points || [];
+    pathDuration = r.duration || 0;
   } catch (e) {
     pathPoints = [];                 // draw the arcs and no path, not a lie
+    pathDuration = 0;
   } finally {
     pathPending = false;
   }
   pathMapDraw();
 }
+
+// ---------- timeline scrub ----------
+// Preview only: dragging the timeline moves a ghost marker on the travel map
+// by re-reading the samples already fetched from the host sampler. It never
+// sends a command -- the camera does not move because the operator dragged a
+// bar.
+function scrubAt(clientX) {
+  if (!pathPoints.length || pathDuration <= 0) { scrubGhost = null; return; }
+  const r = $("tl").getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+  const idx = Math.round(frac * (pathPoints.length - 1));
+  const pt = pathPoints[idx];
+  scrubGhost = pt ? [pt[0], pt[1]] : null;
+  pathMapDraw();
+}
+$("tl").addEventListener("pointerdown", ev => scrubAt(ev.clientX));
+$("tl").addEventListener("pointermove", ev => { if (ev.buttons) scrubAt(ev.clientX); });
+$("tl").addEventListener("pointerleave", () => { scrubGhost = null; pathMapDraw(); });
+$("previewRange").oninput = e => {
+  const fraction = +e.target.value / 1000;
+  const p = pathPoints[Math.round(fraction * (pathPoints.length - 1))];
+  scrubGhost = p || null;
+  $("previewReadout").textContent = (fraction * pathDuration).toFixed(1) + "s";
+  pathMapDraw();
+};
 
 // ---------- pre-flight ----------
 // Answers "can the rig shoot this" before the take rather than after it. Three
@@ -1624,20 +2064,36 @@ async function runPreflight() {
   }
 }
 $("btnPreflight").onclick = runPreflight;
+$("btnPosition").onclick = async () => {
+  if (!(await pushMove()).ok) return;
+  await post("/api/goto", {index:+$("rehearsalPoint").value});
+};
+$("btnRehearse").onclick = async () => {
+  if (!(await pushMove()).ok) return;
+  const first = +$("rehearsalPoint").value;
+  await post("/api/move/segment", {first,last:first + 1});
+};
 
 // ---------- shot library ----------
 // Saved on the host, not in the browser: a shot list that dies with the tab
 // is not a shot list. The file Save/Load below stays as well -- that is how a
 // move gets off this machine and onto someone else's.
 async function refreshLibrary() {
-  let entries = [];
+  let all = [];
   try {
-    entries = (await fetch("/api/moves").then(r => r.json())).moves || [];
+    all = (await fetch("/api/moves").then(r => r.json())).moves || [];
   } catch (e) { /* the status poll reports a dead host */ }
+  libEntries = all;
+  const q = ($("libSearch").value || "").trim().toLowerCase();
+  const entries = q ? all.filter(e => e.name.toLowerCase().includes(q)) : all;
   const box = $("libList");
   box.innerHTML = "";
-  if (!entries.length) {
+  if (!all.length) {
     box.innerHTML = '<div class="lib-empty">nothing saved yet</div>';
+    return;
+  }
+  if (!entries.length) {
+    box.innerHTML = '<div class="lib-empty">no saved shots match that search</div>';
     return;
   }
   for (const e of entries) {
@@ -1665,11 +2121,16 @@ async function refreshLibrary() {
 async function libSave() {
   const name = ($("moveName").value || "").trim();
   if (!name) { showError("give the shot a name before saving it"); return; }
+  if (libEntries.some(e => e.name === name) &&
+      !confirm(`"${name}" already exists in the library. Overwrite it?`)) return;
+  const synced = await pushMove(); if (!synced.ok) return;
   const r = await post("/api/moves/save", { name });
   if (r && r.ok) { await refreshLibrary(); }
 }
 
 async function libLoad(name) {
+  if (move.waypoints.length &&
+      !confirm(`Load "${name}"? This discards the shot you are currently editing.`)) return;
   const r = await post("/api/moves/load", { name });
   if (!r || !r.ok) return;
   move = r.move;
@@ -1688,6 +2149,7 @@ async function libDelete(name) {
 
 $("btnLibSave").onclick = libSave;
 $("btnLibRefresh").onclick = refreshLibrary;
+$("libSearch").oninput = refreshLibrary;
 refreshLibrary();
 
 $("btnSave").onclick = () => {
@@ -1700,14 +2162,23 @@ $("btnSave").onclick = () => {
 $("btnLoad").onclick = () => $("fileIn").click();
 $("fileIn").onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
+  if (move.waypoints.length &&
+      !confirm(`Import "${f.name}"? This discards the shot you are currently editing.`)) {
+    e.target.value = ""; return;
+  }
   try {
-    move = JSON.parse(await f.text());
+    const candidate = JSON.parse(await f.text());
+    const accepted = await post("/api/move", candidate);
+    if (!accepted.ok) return;
+    const state = await (await fetch("/api/status")).json();
+    move = {name:state.move.name, loop:state.move.loop, ping_pong:state.move.ping_pong,
+      route_arcs:state.move.route_arcs !== false, setup:state.setup, waypoints:state.move.waypoints};
     $("moveName").value = move.name || "untitled";
     $("optLoop").checked = !!move.loop;
     $("optPing").checked = !!move.ping_pong;
-    await pushMove(); renderWaypoints(); renderTimeline();
+    unsentDraft = false; renderWaypoints(); renderTimeline(); refreshPath();
   } catch (err) { showError("bad shot file: " + err.message); }
-  e.target.value = "";
+  finally { e.target.value = ""; }
 };
 
 // ---------- joystick ----------
@@ -1748,8 +2219,9 @@ setInterval(() => {
 const keys = {};
 window.addEventListener("keydown", ev => {
   if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return;
-  if (ev.code === "Space") { post("/api/action",{name:"recenter"}); ev.preventDefault(); return; }
+  if (ev.code === "Space" && workspace === "shoot") { post("/api/action",{name:"recenter"}); ev.preventDefault(); return; }
   if (!ev.code.startsWith("Arrow")) return;
+  if (workspace !== "shoot") return;
   keys[ev.code] = true; applyKeys(); ev.preventDefault();
 });
 window.addEventListener("keyup", ev => {
@@ -1952,7 +2424,7 @@ $("btnArm").onclick = () => post(armed ? "/api/disarm" : "/api/arm",
 $("btnGo").onclick = () => post("/api/cue/go");
 window.addEventListener("keydown", ev => {
   if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return;
-  if (ev.code === "Enter" && waitingCue !== null) { post("/api/cue/go"); ev.preventDefault(); }
+  if (ev.code === "Enter" && workspace === "shoot" && waitingCue !== null) { post("/api/cue/go"); ev.preventDefault(); }
 });
 
 // ---------- setup fingerprint ----------
@@ -1962,13 +2434,14 @@ const SETUP = { suMount:"mount", suHeight:"height_cm", suBase:"base_orientation"
 function pushSetup() {
   const body = {};
   for (const [id, key] of Object.entries(SETUP)) body[key] = $(id).value;
-  post("/api/setup", body);
+  move.setup = {...(move.setup || {}), ...body};
+  pushMove();
 }
 Object.keys(SETUP).forEach(id => $(id).onchange = pushSetup);
 function fillSetup(setup) {
   if (!setup) return;
   for (const [id, key] of Object.entries(SETUP)) {
-    if (document.activeElement !== $(id) && setup[key] != null) $(id).value = setup[key];
+    if (document.activeElement !== $(id) && !unsentDraft) $(id).value = setup[key] ?? "";
   }
 }
 
@@ -2079,19 +2552,29 @@ document.addEventListener("fullscreenchange", () => {
 // below a fifth of throw and doubles at the top, so a multiplier meant
 // something different at every point of the stick.
 let speedPreset = "normal";
-function setSpeed(name) {
+function setSpeedUI(name) {
   speedPreset = name;
   document.querySelectorAll(".spd").forEach(b =>
     b.classList.toggle("on", b.dataset.speed === name));
+}
+function setSpeed(name) {
+  setSpeedUI(name);
   post("/api/speed", { preset: name });
+  try { localStorage.setItem("osmo.speed", name); } catch (e) {}
 }
 document.querySelectorAll(".spd").forEach(b =>
   b.onclick = () => setSpeed(b.dataset.speed));
-try { setSpeed(localStorage.getItem("osmo.speed") || "normal"); }
-catch (e) { setSpeed("normal"); }
+// No startup write: the host's own speed_preset (reflected each poll) is the
+// source of truth. This only seeds the label before the first poll lands.
+try { setSpeedUI(localStorage.getItem("osmo.speed") || "normal"); }
+catch (e) { setSpeedUI("normal"); }
 
 $("fsZoom").oninput = e => { $("fsZoomVal").textContent = (+e.target.value).toFixed(1) + "×"; };
-$("fsZoom").onchange = e => send("zoom", +e.target.value);
+$("fsZoom").onchange = e => {
+  post("/api/camera", { set:"zoom", value:+e.target.value });
+  $("rngZoom").value = e.target.value;
+  $("zoomVal").textContent = (+e.target.value).toFixed(1) + "×";
+};
 $("fsArm").onclick = () => post(armed ? "/api/disarm" : "/api/arm", {});
 $("fsRec").onclick = () => toggleRecord(!recording);
 
@@ -2172,27 +2655,34 @@ $("btnCompare").onclick = async () => {
   const out = $("cmpOut");
   out.className = "cmp-out on";
   if (a === b) { out.textContent = "a take always matches itself"; return; }
-  const r = await post("/api/takes/compare",
-                       { first: a, second: b, fov_deg: +$("cmpFov").value || 84 });
+  const fovRaw = $("cmpFov").value.trim();
+  const body = { first: a, second: b };
+  if (fovRaw !== "") body.fov_deg = +fovRaw;
+  const r = await post("/api/takes/compare", body);
   if (!r || !r.ok) { out.textContent = (r && r.error) || "could not compare"; return; }
   const c = r.comparison;
   out.classList.add(c.verdict === "matched" ? "matched"
                     : c.verdict === "needs stabilise" ? "stab" : "no");
-  out.innerHTML =
-    `<b>${c.verdict}</b> — ${c.takes[0]} vs ${c.takes[1]}: peak ` +
-    `<b>${c.peak_px} px</b> (${c.peak_deg}&deg;) at ${c.peak_at}s, ` +
-    `rms ${c.rms_px} px. Assumes a ${c.fov_deg}&deg; field of view across ` +
-    `${c.width_px} px — set it to your lens.`;
+  out.textContent =
+    `${c.verdict} — ${c.takes[0]} vs ${c.takes[1]}: peak ` +
+    `${c.peak_px} px (${c.peak_deg}°) at ${c.peak_at}s, ` +
+    `rms ${c.rms_px} px. ${c.fov_deg}° field of view across ` +
+    `${c.width_px} px (${c.fov_source || "saved lens"}). ` +
+    `${c.overlap_seconds}s overlap · ${Math.round(c.coverage_a*100)}% / ${Math.round(c.coverage_b*100)}% coverage. ` +
+    `${(c.quality_reasons||[]).join('; ')}. Angular estimate only—not proof of a composite. ${c.timeline||''}`;
 };
 
 const pushSlate = () => post("/api/slate", {
   scene: $("slScene").value, shot: $("slShot").value, take: +$("slTake").value });
 ["slScene","slShot","slTake"].forEach(id => $(id).onchange = pushSlate);
 $("btnLogTake").onclick = async () => {
-  await post("/api/take", { note: $("takeNote").value });
-  $("takeNote").value = "";
+  const r = await post("/api/take", { note: $("takeNote").value });
+  if (r.ok) $("takeNote").value = "";
 };
-$("btnCircle").onclick = () => post("/api/take/circle");
+$("btnCircle").onclick = () => {
+  const id=lastStatus?.takes?.at(-1)?.id;
+  if (id != null) post("/api/take/circle",{id});
+};
 $("btnExportLog").onclick = async () => {
   const takes = await allTakes();
   const rows = [["scene","shot","take","circled","move","duration","verdict",
@@ -2261,6 +2751,62 @@ document.addEventListener("keydown", ev => {
 });
 
 renderWaypoints(); renderTimeline();
+document.addEventListener('input',e=>{if(e.target.matches('#moveName,[data-k],[id^="su"]')){localTyping=true;localEditRevision++;}});
+window.addEventListener('osmo-conflict',()=>{unsentDraft=true;window.director?.invalidate();$('conflictBanner').hidden=false;});
+$('exportConflict').onclick=()=>$('btnSave').click();
+$('reloadConflict').onclick=async()=>{
+  if(!confirm('Reload the host draft? Export first if you need to keep your local edits.'))return;
+  const response=await fetch('/api/status',{signal:AbortSignal.timeout(2000)}).catch(()=>null);
+  if(!response?.ok){showError('Host unavailable. Local edits preserved.');return;}
+  const status=await response.json();if(!OsmoSession.reset(status)){showError('Host changed again. Local edits preserved; retry reload.');return;}unsentDraft=localTyping=false;draftInitialized=false;
+  $('conflictBanner').hidden=true;await poll();
+};
+window.director=createDirector($('directorPanel'),{
+  getMove:()=>structuredClone(move),post,
+  edit:index=>{editingWaypoint=index;renderWaypoints();setWorkspace('compose');const button=document.querySelector(`[data-edit="${index}"]`);button?.focus();button?.scrollIntoView({block:'center'});},
+  apply:async (proposed,selection=null)=>{
+    const revision=localEditRevision, before=JSON.stringify(move);
+    const r=await post('/api/move',selection?{_assistant:selection}:proposed);if(!r.ok)return false;
+    if(revision!==localEditRevision||before!==JSON.stringify(move)){
+      window.director?.invalidate();showError('Newer local edits kept. Refresh Director after they save; the timing response did not replace them.');return false;
+    }
+    window.director?.invalidate();
+    move=structuredClone(r.move||proposed);unsentDraft=localTyping=false;$('moveName').value=move.name;
+    $('optLoop').checked=move.loop;$('optPing').checked=move.ping_pong;
+    renderWaypoints();renderTimeline();await refreshPath();return true;
+  }
+});
+window.copilot=createCopilot($('directorPanel'),{
+  post,
+  ready:()=>draftInitialized&&!unsentDraft&&!localTyping&&!OsmoSession.pending&&!OsmoSession.conflicted&&!hostLost,
+  signature:()=>JSON.stringify([OsmoSession.generation,localEditRevision,move]),
+  preview:treatment=>window.director.previewTreatment(treatment),
+  apply:(treatment,selection)=>window.director.applyTreatment(treatment.move,selection),
+  original:()=>window.director.activate()
+});
+
+// Register panels once after construction; arranging changes geometry only.
+const safeToArrange=()=>!held&&!armed&&!running&&!recording&&(!lastStatus?.owner||lastStatus.owner==='none');
+window.studioUI=createSurfaceUI({host:document.querySelector('header'),post,reload:()=>location.reload(),canArrange:safeToArrange});
+document.querySelectorAll('.worktab').forEach(b=>{b.prepend(OsmoUI.icon(b.dataset.work));b.title=NEXT_ACTION[b.dataset.work].replace(/<[^>]+>/g,'');});
+const layouts=new Map();
+for(const name of WORKSPACES.filter(n=>n!=='director')){
+  const panels=[...studioGrid.querySelectorAll(':scope > .card[data-workspace="'+name+'"]')];
+  const group=document.createElement('section');group.className='studio-workspace-grid';group.dataset.workspace=name;group.hidden=workspace!==name;studioGrid.append(group);
+  panels.forEach((panel,index)=>{if(!panel.id)panel.id=name+'-panel-'+index;group.append(panel);});
+  layouts.set(name,createWorkspaceLayout(group,{id:'studio-'+name,canArrange:safeToArrange,panels:panels.map(panel=>({id:panel.id,element:panel,title:panel.querySelector('h2')?.textContent.trim().split('\n')[0]||panel.id,w:name==='shoot'&&panel.id==='monitorCard'?12:6,minW:4,minH:2}))}));
+}
+const directorRoot=$('directorPanel'),directorDock=document.createElement('div');directorDock.className='director-dock';
+const directorNodes=[directorRoot.querySelector('.d-stage'),directorRoot.querySelector('.d-pace'),directorRoot.querySelector('.ai-studio'),directorRoot.querySelector('.d-score')];
+directorRoot.querySelector('.d-layout').remove();directorRoot.append(directorDock);directorNodes.forEach(n=>directorDock.append(n));
+layouts.set('director',createWorkspaceLayout(directorDock,{id:'studio-director',canArrange:safeToArrange,panels:directorNodes.map((element,i)=>({id:['rehearsal','pace','copilot','score'][i],title:['Rehearsal','Shot pace','AI Shot Copilot','Shot score'][i],element,w:i===0?8:i===1?4:12,minW:i===1?3:4,minH:2}))}));
+window.refreshStudioLayout=name=>{layouts.get(name)?.activate();layouts.get(name)?.refresh();};
+refreshStudioLayout(workspace);
+window.addEventListener('osmo-ai-settings',e=>{if(!e.detail)return;const {model,effort}=e.detail;if(!$('aiModel').disabled)$('aiModel').value=model;if(!$('aiEffort').disabled)$('aiEffort').value=effort;window.copilot?.activate(true);});
+const exportBox=document.createElement('details');exportBox.className='osmo-export';exportBox.innerHTML='<summary>Editorial package</summary><p>Saved take paths + measured motion + evidence hashes. No video or recording confirmation is invented.</p><div class="osmo-export-list" id="editorialTakes"></div><label>Export frame grid <select id="editorialFps"><option>24</option><option selected>25</option><option>30</option><option>50</option><option>60</option></select> fps</label><label><input id="editorialNotes" type="checkbox">Include labels and notes</label><button type="button" id="editorialDownload">Download selected takes</button><p id="editorialState" role="status"></p><details><summary>What goes to post?</summary><p>CSV/CHAN are relative pan and tilt, resampled on programmed motion time—not video timecode. Lens and world translation are unmeasured. Missing, aborted or gapped evidence stays explicit.</p></details>';
+exportBox.querySelector('summary').prepend(OsmoUI.icon('export'));$('takeCard').append(exportBox);
+exportBox.addEventListener('toggle',async()=>{if(!exportBox.open)return;const takes=await allTakes(),list=$('editorialTakes');list.replaceChildren();for(const take of takes){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=take.id;label.append(input,document.createTextNode(`${take.scene}${take.shot} / ${take.take}${take.circled?' · circled':''}`));list.append(label);}if(!takes.length)list.textContent='Log a take before creating a handoff package.';});
+$('editorialDownload').onclick=async()=>{const ids=[...$('editorialTakes').querySelectorAll('input:checked')].map(i=>+i.value);if(!ids.length||ids.length>20){$('editorialState').textContent='Select 1–20 takes.';return;}const button=$('editorialDownload');button.disabled=true;try{const r=await fetch('/api/editorial/export',{method:'POST',headers:{'Content-Type':'application/json','X-Osmo-Client':OsmoSession.client},body:JSON.stringify({ids,fps:+$('editorialFps').value,include_notes:$('editorialNotes').checked}),signal:AbortSignal.timeout(15000)});if(!r.ok){$('editorialState').textContent=(await r.json()).error||'Export failed; source takes unchanged.';return;}const url=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=url;a.download='osmodesk-editorial.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);$('editorialState').textContent='Package downloaded. Source takes are unchanged.';}catch(_){$('editorialState').textContent='Host unavailable. No take data changed.';}finally{button.disabled=false;}};
 </script>
 </body>
 </html>

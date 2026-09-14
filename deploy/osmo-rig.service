@@ -19,7 +19,7 @@ WorkingDirectory=%h/osmo-rig
 # No --skip flags: this is the real thing. The camera is connected from the UI
 # rather than at start-up, so the service comes up whether or not the camera is
 # switched on -- which is the normal state of a rig sitting in a case.
-ExecStart=%h/osmo-rig/.venv/bin/python %h/osmo-rig/server.py --lan --token __TOKEN__
+ExecStart=%h/osmo-rig/.venv/bin/python %h/osmo-rig/server.py --lan --token __TOKEN__ --state-dir %h/.local/share/osmo-rig/moves
 Restart=on-failure
 RestartSec=3
 # A crash loop should be visible, not silently retried for ever.

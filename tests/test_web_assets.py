@@ -40,6 +40,13 @@ class Page:
             self.script += "\n" + (WEB / extra_script).read_text(encoding="utf-8")
         self.style = "\n".join(
             re.findall(r"<style[^>]*>(.*?)</style>", self.html, re.S))
+        # Follow the page's local stylesheet links instead of exempting classes
+        # merely because the new workspace moved CSS out of the inline page.
+        for link in re.findall(r"<link\b[^>]*>", self.html):
+            if re.search(r'rel="stylesheet"', link):
+                local = re.search(r'href="/?([\w.-]+\.css)"', link)
+                if local:
+                    self.style += "\n" + (WEB / local.group(1)).read_text(encoding="utf-8")
 
     @property
     def markup_classes(self) -> set[str]:
@@ -177,6 +184,23 @@ class TestScriptReferences(unittest.TestCase):
 
 
 class TestScriptParses(unittest.TestCase):
+    def test_director_and_shared_session_modules(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed")
+        for name in ("director.js", "session.js", "copilot.js"):
+            with self.subTest(module=name):
+                done = subprocess.run([node, "--check", str(WEB / name)], capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_shared_browser_session_regressions(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed")
+        done = subprocess.run([node, str(WEB.parent / "tools" / "verify_session.cjs")],
+                              capture_output=True, text=True, timeout=15)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
     def test_node_accepts_every_page(self):
         node = shutil.which("node")
         if not node:
@@ -221,10 +245,12 @@ class TestMonitorHonesty(unittest.TestCase):
 
     page = PAGES[1]
 
-    def test_the_tally_distinguishes_acknowledged_from_confirmed(self):
+    def test_the_tally_distinguishes_requested_from_reported(self):
         """The record opcode is unverified and nothing reports the tally back,
         so an unqualified red border would assert something we cannot know."""
-        self.assertIn("REC ACK", self.page.script)
+        self.assertTrue("REC REQUESTED" in self.page.script)
+        self.assertTrue("verify camera" in self.page.script)
+        self.assertNotIn("REC ACK", self.page.script)
         self.assertIn("body.rec.confirmed", self.page.style)
         self.assertRegex(self.page.style,
                          r"body\.rec #tally\{[^}]*border-style:dashed")

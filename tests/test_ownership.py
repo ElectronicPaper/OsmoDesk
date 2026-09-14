@@ -66,6 +66,7 @@ class TestGrab(unittest.TestCase):
         s.grab("core2")
         s.let_go("phone")            # a phone cannot release the Core2's grip
         self.assertEqual(s.owner, "core2")
+        self.assertTrue(s.clutch.state.engaged)
 
 
 class TestClutchOutranksPhone(unittest.TestCase):
@@ -79,6 +80,28 @@ class TestClutchOutranksPhone(unittest.TestCase):
             s.take_ownership("phone")
         self.assertIn("clutch is held", str(cm.exception))
         self.assertEqual(s.owner, "core2")
+
+    def test_jog_and_delayed_release_cannot_override_held_core2(self):
+        from unittest.mock import patch
+        s = live_session()
+        with patch.object(s, "_start_kinetic"):
+            s.grab("core2")
+        for axes in ((0.4, 0.2), (0.0, 0.0)):
+            with self.subTest(axes=axes), self.assertRaisesRegex(RuntimeError, "clutch is held"):
+                s.set_axes(*axes)
+            self.assertEqual(s.owner, "core2")
+            self.assertTrue(s.clutch.state.engaged)
+            self.assertIsNone(s.stick.axes)
+
+    def test_stale_browser_zero_does_not_abort_program(self):
+        s = live_session()
+        s.owner = "program"
+        s.runner.running = True
+        s.armed = True
+        s.set_axes(0, 0)
+        self.assertTrue(s.runner.running)
+        self.assertTrue(s.armed)
+        self.assertEqual(s.owner, "program")
 
     def test_phone_may_take_over_once_released(self):
         s = live_session()

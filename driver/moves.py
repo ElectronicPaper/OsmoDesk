@@ -24,9 +24,12 @@ from dataclasses import dataclass, field, asdict
 
 def wrap180(delta: float) -> float:
     """Shortest signed angle difference in degrees."""
-    while delta > 180.0:
+    if not math.isfinite(delta):
+        raise ValueError("angle must be finite")
+    delta = math.fmod(delta, 360.0)
+    if delta > 180.0:
         delta -= 360.0
-    while delta < -180.0:
+    elif delta < -180.0:
         delta += 360.0
     return delta
 
@@ -50,6 +53,19 @@ def _bool_field(data: dict, name: str, default: bool) -> bool:
     value = data.get(name, default)
     if type(value) is not bool:
         raise ValueError(f"{name} must be a boolean")
+    return value
+
+
+def _number(value, name: str) -> float:
+    """One numeric boundary for imported paths and their HTTP representation."""
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a finite number")
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{name} must be a finite number") from None
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
     return value
 
 
@@ -367,15 +383,21 @@ class Waypoint:
 
     @staticmethod
     def from_dict(d: dict) -> "Waypoint":
+        if not isinstance(d, dict) or "pitch" not in d or "yaw" not in d:
+            raise ValueError("waypoint must be an object with pitch and yaw")
+        easing = str(d.get("easing", DEFAULT_EASING))
+        zoom_easing = str(d.get("zoom_easing", DEFAULT_EASING))
+        get_easing(easing)
+        get_easing(zoom_easing)
         return Waypoint(
             name=str(d.get("name", "")),
-            pitch=float(d["pitch"]),
-            yaw=float(d["yaw"]),
-            duration=max(0.1, float(d.get("duration", 3.0))),
-            dwell=max(0.0, float(d.get("dwell", 0.0))),
-            easing=str(d.get("easing", DEFAULT_EASING)),
-            zoom=None if d.get("zoom") is None else _clamp01(float(d["zoom"])),
-            zoom_easing=str(d.get("zoom_easing", DEFAULT_EASING)),
+            pitch=wrap180(_number(d["pitch"], "pitch")),
+            yaw=wrap180(_number(d["yaw"], "yaw")),
+            duration=max(MIN_LEG_S, _number(d.get("duration", 3.0), "duration")),
+            dwell=max(0.0, _number(d.get("dwell", 0.0), "dwell")),
+            easing=easing,
+            zoom=None if d.get("zoom") is None else _clamp01(_number(d["zoom"], "zoom")),
+            zoom_easing=zoom_easing,
             flow=_bool_field(d, "flow", False),
             cue=_bool_field(d, "cue", False),
         )
@@ -424,6 +446,23 @@ class Move:
         return [(t, i) for i, t in enumerate(self.arrival_times())
                 if self.waypoints[i].cue]
 
+    def playback_cue_points(self) -> list[tuple[float, int]]:
+        """Cue arrivals in actual playback order, including a ping-pong return.
+
+        A cue at a zero-dwell turnaround is one instant, not two consecutive GO
+        prompts. Loops retain the established one-cycle cue behavior.
+        """
+        points = self.cue_points()
+        if self.ping_pong:
+            arrivals = self.arrival_times()
+            for i in range(len(self.waypoints) - 1, -1, -1):
+                waypoint = self.waypoints[i]
+                if waypoint.cue:
+                    reverse_at = (self.cycle_duration
+                                  - arrivals[i] - waypoint.dwell)
+                    points.append((reverse_at, i))
+        return sorted(set(points))
+
     @property
     def has_cues(self) -> bool:
         return any(w.cue for w in self.waypoints)
@@ -468,7 +507,8 @@ class Move:
 
     def _tangents(self, attr: str) -> list[float]:
         return hermite_tangents(self._unwrapped(attr), self._durations(),
-                                [w.flow for w in self.waypoints])
+                                [w.flow and not w.cue and w.dwell == 0
+                                 for w in self.waypoints])
 
     @property
     def total_duration(self) -> float:
@@ -479,6 +519,16 @@ class Move:
         for _, end in self.legs:
             total += end.duration + end.dwell
         return total
+
+    @property
+    def cycle_duration(self) -> float:
+        """One complete programmed cycle, including a ping-pong return."""
+        return self.total_duration * (2.0 if self.ping_pong else 1.0)
+
+    @property
+    def playback_duration(self) -> float | None:
+        """Finite playback duration, or None for an intentionally open loop."""
+        return None if self.loop else self.cycle_duration
 
     def sample(self, t: float) -> tuple[float, float] | None:
         """Position at time `t` seconds, or None once the move has finished.
@@ -507,7 +557,10 @@ class Move:
         total = self.total_duration
         if self.ping_pong and total > 0:
             cycle = total * 2
-            t = t % cycle if self.loop else t
+            if self.loop:
+                t %= cycle
+            elif t >= cycle:
+                t = 0.0       # finite round trip ends holding its start frame
             if t > total:
                 t = cycle - t  # reverse leg
         elif self.loop and total > 0:
@@ -590,7 +643,10 @@ class Move:
         if total > 0:
             if self.ping_pong:
                 cycle = total * 2
-                t = t % cycle if self.loop else t
+                if self.loop:
+                    t %= cycle
+                elif t >= cycle:
+                    t = 0.0
                 if t > total:
                     t = cycle - t
             elif self.loop:
@@ -606,9 +662,9 @@ class Move:
         return nodes[-1][1]
 
     def finished(self, t: float) -> bool:
-        if self.loop or self.ping_pong:
+        if self.loop:
             return False
-        return t >= self.total_duration
+        return t >= self.cycle_duration
 
     # --- between takes --------------------------------------------------------
     #
@@ -664,20 +720,22 @@ class Move:
         if (factor is None) == (total is None):
             raise ValueError("give exactly one of factor or total")
         if total is not None:
+            total = _number(total, "total duration")
             if total <= 0:
                 raise ValueError("total duration must be positive")
             current = self.total_duration
             if current <= 0:
                 raise ValueError("this move has no duration to scale")
             factor = total / current
+        factor = _number(factor, "retime factor")
         if factor <= 0:
             raise ValueError("retime factor must be positive")
 
         out = Move.from_dict(self.to_dict())
         for w in out.waypoints:
             # MIN_LEG guards the sampler, which divides by duration.
-            w.duration = max(MIN_LEG_S, w.duration * factor)
-            w.dwell = w.dwell * factor
+            w.duration = max(MIN_LEG_S, _number(w.duration * factor, "duration"))
+            w.dwell = _number(w.dwell * factor, "dwell")
         return out
 
     def offset(self, pitch: float = 0.0, yaw: float = 0.0) -> "Move":
@@ -726,6 +784,23 @@ class Move:
     SETUP_FIELDS = ("mount", "height_cm", "base_orientation", "route",
                     "lens_accessory", "nd_filter", "zoom", "fov_deg", "notes")
 
+    @staticmethod
+    def validated_setup(fields: dict) -> dict:
+        if not isinstance(fields, dict):
+            raise ValueError("setup must be an object")
+        out = {}
+        for key, value in fields.items():
+            if key not in Move.SETUP_FIELDS:
+                continue
+            if value is not None and not isinstance(value, (str, int, float)):
+                raise ValueError(f"setup {key} must be text or a finite number")
+            if isinstance(value, (int, float)):
+                _number(value, f"setup {key}")
+            if isinstance(value, str) and len(value) > 4096:
+                raise ValueError(f"setup {key} is too long")
+            out[key] = value
+        return out
+
     def fov_deg(self) -> float | None:
         """Horizontal field of view, if the operator has stated it.
 
@@ -763,6 +838,12 @@ class Move:
 
     @staticmethod
     def from_dict(d: dict) -> "Move":
+        if not isinstance(d, dict):
+            raise ValueError("move must be an object")
+        if not isinstance(d.get("waypoints", []), list):
+            raise ValueError("waypoints must be a list")
+        if d.get("setup") is not None and not isinstance(d["setup"], dict):
+            raise ValueError("setup must be an object")
         return Move(
             name=str(d.get("name", "untitled")),
             loop=_bool_field(d, "loop", False),
@@ -771,7 +852,7 @@ class Move:
             # crossed the wedge was already playing wrong, and reproducing the
             # wrong path faithfully is not a kindness.
             route_arcs=_bool_field(d, "route_arcs", True),
-            setup=dict(d.get("setup") or {}),
+            setup=Move.validated_setup(d.get("setup") or {}),
             waypoints=[Waypoint.from_dict(w) for w in d.get("waypoints", [])],
         )
 

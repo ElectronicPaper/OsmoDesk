@@ -39,6 +39,9 @@ class TestDeployPackage(unittest.TestCase):
             {
                 "server.py", "run.py", "web/index.html",
                 "contracts/camera-control-v1.json",
+                "requirements-live.txt", "tools/verify_session.cjs", "tools/verify_vault.py",
+                "package.json", "package-lock.json", "web/vendor/snapgrid.js",
+                "web/vendor/THIRD-PARTY-NOTICES.txt", "THIRD_PARTY_NOTICES.md",
             }.issubset(names)
         )
         self.assertFalse(any(name.startswith("firmware/") for name in names))
@@ -81,12 +84,22 @@ class TestDeployPackage(unittest.TestCase):
         self.assertNotIn("sort -r", source)
         self.assertNotIn("tail -n +4", source)
 
-    def test_moves_are_persistent_seeded_and_linked_before_candidate_proof(self):
+    def test_moves_are_persistent_seeded_and_directly_selected(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('PERSISTENT_MOVES="$STATE_DIR/moves"', source)
         self.assertIn('cp -a -n "$PREVIOUS_RELEASE/moves/." "$PERSISTENT_MOVES/"', source)
-        self.assertIn('ln -s "$PERSISTENT_MOVES" "$RELEASE_DIR/moves"', source)
-        self.assertLess(source.index('ln -s "$PERSISTENT_MOVES" "$RELEASE_DIR/moves"'), source.index('unittest discover -s tests'))
+        self.assertNotIn('ln -s "$PERSISTENT_MOVES" "$RELEASE_DIR/moves"', source)
+        unit = (ROOT / "deploy" / "osmo-rig.service").read_text(encoding="utf-8")
+        self.assertIn('--state-dir %h/.local/share/osmo-rig/moves', unit)
+        self.assertLess(source.index('cp -a -n "$PREVIOUS_RELEASE/moves/."'), source.index('unittest discover -s tests'))
+
+    def test_physical_state_validation_precedes_staging_and_seeding(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        check = source.index('[ ! -L "$state_ancestor" ]')
+        self.assertIn('state_ancestor="$(dirname -- "$state_ancestor")"', source)
+        self.assertLess(check, source.index('mkdir -p "$RELEASES_DIR"'))
+        self.assertLess(check, source.index('mkdir -p "$PERSISTENT_MOVES"'))
+        self.assertLess(check, source.index('cp -a -n "$PREVIOUS_RELEASE/moves/."'))
 
 
 if __name__ == "__main__":

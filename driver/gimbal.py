@@ -13,6 +13,7 @@ the stick in proportion.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 
@@ -64,11 +65,7 @@ FF_LOOKAHEAD_S = 0.05
 
 def _wrap180(delta: float) -> float:
     """Shortest signed angle difference. Pitch wraps at +/-180."""
-    while delta > 180.0:
-        delta -= 360.0
-    while delta < -180.0:
-        delta += 360.0
-    return delta
+    return moves.wrap180(delta)
 
 
 def axis(normalized: float, gain: float = 1.0) -> int:
@@ -405,6 +402,10 @@ class MoveRunner:
         self.stick = stick
         self.kp = kp
         self.limits = limits or moves.SoftLimits()
+        # The server's historical `limits` argument is the canonical pitch arc.
+        # Yaw uses the separately measured arc; treating both as pitch would
+        # invent a coordinate system and reject most legal pans.
+        self.yaw_limits = moves.YAW_LIMITS
 
         self.move: moves.Move | None = None
         self.started_at: float | None = None
@@ -414,6 +415,7 @@ class MoveRunner:
         self.error_yaw = 0.0
         self.clamped = False
         self.report = MoveReport()
+        self.fault = ""
 
         # Cue state: a cued waypoint stops the clock until a human says GO.
         self.waiting_cue: int | None = None
@@ -425,9 +427,9 @@ class MoveRunner:
 
     @property
     def progress(self) -> float:
-        if not self.move or self.move.total_duration <= 0:
+        if not self.move or self.move.cycle_duration <= 0:
             return 0.0
-        return min(1.0, self.elapsed / self.move.total_duration)
+        return min(1.0, self.elapsed / self.move.cycle_duration)
 
     def start(self, move: moves.Move) -> None:
         if len(move.waypoints) < 2:
@@ -435,6 +437,7 @@ class MoveRunner:
         self.stop()
         self.move = move
         self.report = MoveReport()
+        self.fault = ""
         self.waiting_cue = None
         self._pause_offset = 0.0
         self._cue_go.clear()
@@ -468,7 +471,7 @@ class MoveRunner:
         self.started_at = start_time
         period = 1.0 / 40.0
         # Cue points, earliest first. The clock stops at each until GO.
-        pending_cues = sorted(move.cue_points())
+        pending_cues = move.playback_cue_points()
         cue_i = 0
         try:
             while not self._stop.wait(period):
@@ -492,18 +495,17 @@ class MoveRunner:
                 if ahead is None:
                     vp = vy = 0.0
                 else:
+                    if not all(math.isfinite(v) for v in (*target, *ahead)):
+                        self._motion_fault(have_telemetry=True)
+                        break
                     vp = _wrap180(ahead[0] - tp) / FF_LOOKAHEAD_S
                     vy = _wrap180(ahead[1] - ty) / FF_LOOKAHEAD_S
 
-                clamped_p = self.limits.clamp_pitch(tp)
-                self.clamped = abs(_wrap180(clamped_p - tp)) > 0.05
-                self._drive(clamped_p, ty, vp, vy)
-                measured = getattr(self, "_last_measured", None)
-                self.report.note(self.error_pitch, self.error_yaw, self.clamped,
-                                 getattr(self.link, "attitude", None) is not None,
-                                 t=self.elapsed,
-                                 pitch=measured[0] if measured else None,
-                                 yaw=measured[1] if measured else None)
+                # A programmed target outside either measured arc is corrupt
+                # runtime input, not an invitation to drive into a soft stop.
+                self.clamped = False
+                if not self._drive(tp, ty, vp, vy, report_time=self.elapsed):
+                    break
 
                 if move.finished(self.elapsed):
                     break
@@ -524,19 +526,24 @@ class MoveRunner:
         self._cue_go.clear()
         paused_at = time.monotonic()
         held = move.sample(cue_time)
+        if held is None or not self._drive(held[0], held[1]):
+            self.waiting_cue = None
+            return False
         while not self._cue_go.wait(0.05):
             if self._stop.is_set():
                 self.waiting_cue = None
                 return False
             # Keep actively holding the framing rather than drifting.
-            if held is not None:
-                self._drive(self.limits.clamp_pitch(held[0]), held[1])
+            if not self._drive(held[0], held[1]):
+                self.waiting_cue = None
+                return False
         self.waiting_cue = None
         self._pause_offset += time.monotonic() - paused_at
         return not self._stop.is_set()
 
     def _drive(self, target_pitch: float, target_yaw: float,
-               vel_pitch: float = 0.0, vel_yaw: float = 0.0) -> None:
+               vel_pitch: float = 0.0, vel_yaw: float = 0.0,
+               report_time: float | None = None) -> bool:
         """Feedforward plus proportional correction.
 
         Proportional control alone always trails a moving target: it only
@@ -547,9 +554,26 @@ class MoveRunner:
         """
         att = getattr(self.link, "attitude", None)
         if att is None:
-            return
-        self.error_pitch = _wrap180(target_pitch - att.pitch)
-        self.error_yaw = _wrap180(target_yaw - att.yaw)
+            return self._motion_fault(have_telemetry=False)
+        try:
+            target_pitch = float(target_pitch)
+            target_yaw = float(target_yaw)
+            vel_pitch = float(vel_pitch)
+            vel_yaw = float(vel_yaw)
+            measured_pitch = float(att.pitch)
+            measured_yaw = float(att.yaw)
+            values = (target_pitch, target_yaw, vel_pitch, vel_yaw,
+                      measured_pitch, measured_yaw)
+            finite = all(math.isfinite(v) for v in values)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            finite = False
+        if not finite:
+            return self._motion_fault(have_telemetry=False)
+        if (not self.limits.contains(target_pitch)
+                or not self.yaw_limits.contains(target_yaw)):
+            return self._motion_fault(have_telemetry=True, reason="Target outside configured gimbal travel; revise the shot before retrying")
+        self.error_pitch = _wrap180(target_pitch - measured_pitch)
+        self.error_yaw = _wrap180(target_yaw - measured_yaw)
 
         # Everything here is in degrees per second, including the gain: `kp`
         # answers "how fast should a degree of error be corrected", which is a
@@ -559,10 +583,24 @@ class MoveRunner:
         # already was. The stick applies signs and linearisation.
         self.stick.set_rate(vel_pitch + self.error_pitch * self.kp,
                             vel_yaw + self.error_yaw * self.kp)
-        # Remembered for the take log so two takes can be compared later. The
-        # measured attitude, not the commanded target: the target is identical
-        # between takes by construction and comparing it proves nothing.
-        self._last_measured = (att.pitch, att.yaw)
+        if report_time is not None:
+            # Record only the measurement validated in this tick. There is no
+            # cached fallback: lost telemetry cannot repeat a previous point.
+            self.report.note(self.error_pitch, self.error_yaw, False, True,
+                             t=report_time, pitch=measured_pitch,
+                             yaw=measured_yaw)
+        return True
+
+    def _motion_fault(self, have_telemetry: bool, reason: str = "") -> bool:
+        """Latch a programmed-motion fault and stop without a shaped tail."""
+        self.report.note(0.0, 0.0, False, have_telemetry)
+        self.fault = reason or ("Invalid motion target; revise the shot before retrying" if have_telemetry
+                                else "Camera telemetry missing or invalid; motion stopped")
+        self.report.aborted = True
+        self.running = False
+        self._stop.set()
+        self.stick.abort()
+        return False
 
 
 class AttitudeFollower:

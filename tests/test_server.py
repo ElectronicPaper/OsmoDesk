@@ -210,6 +210,50 @@ class TestTakeLog(unittest.TestCase):
         self.assertEqual(self.s.slate["take"], 2)
         self.assertEqual(self.s.log_take("again")["take"], 2)
 
+    def _run_shot(self):
+        from driver.gimbal import MoveReport
+        s = self.s
+        s.move = moves.Move(name="original", setup={"fov_deg": "40"}, waypoints=[
+            moves.Waypoint("P1", 90, 0), moves.Waypoint("P2", 100, 10)])
+        s.runner = fake_runner()
+        def start(shot):
+            s.runner.report = MoveReport()
+            s.runner.running = False
+        s.runner.start = start
+        s._start_shot_run()
+        s.runner.report.note(0.1, 0.1, False, True, t=0, pitch=90, yaw=0)
+        s.runner.report.note(0.1, 0.1, False, True, t=1, pitch=95, yaw=5)
+        return s
+
+    def test_positioning_and_editing_do_not_relabel_shot_evidence(self):
+        s = self._run_shot()
+        s.move.name = "another edit"
+        s.move.waypoints[0].yaw = 30
+        s.move.setup["fov_deg"] = "12"
+        s.runner.start(moves.Move(name="goto"))
+        e = s.log_take()
+        self.assertEqual(e["move"], "original")
+        self.assertEqual(e["path"]["waypoints"][0]["yaw"], 0)
+        self.assertEqual(e["setup_fields"]["fov_deg"], "40")
+        self.assertEqual(e["motion"]["samples"], 2)
+        self.assertEqual(e["source"], "shot run")
+
+    def test_logging_consumes_run_once_and_refuses_partial_evidence(self):
+        s = self._run_shot()
+        s.runner.running = True
+        with self.assertRaisesRegex(RuntimeError, "finish the shot"):
+            s.log_take()
+        s.runner.running = False
+        self.assertIsNotNone(s.log_take()["run_id"])
+        second = s.log_take()
+        self.assertIsNone(second["motion"])
+        self.assertIsNone(second["run_id"])
+
+    def test_no_full_shot_does_not_claim_goto_as_take(self):
+        self.s.runner = fake_runner()
+        self.s.runner.report.note(0, 0, False, True)
+        self.assertIsNone(self.s.log_take()["motion"])
+
     def test_entry_carries_slate_and_note(self):
         self.s.set_slate("14", "C", 3)
         e = self.s.log_take("soft focus", circled=True)
@@ -412,6 +456,57 @@ class TestConnectFailureIsReported(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             s.require()
 
+    def test_post_open_failure_closes_unpublished_link(self):
+        from unittest.mock import patch
+        link = FakeLink()
+        link.open = lambda: None
+        s = server.CameraSession(make_args())
+        with patch.object(server, "Datalink", return_value=link), \
+                patch.object(server, "GimbalStick", side_effect=RuntimeError("pump failed")), \
+                self.assertLogs("panel", level="ERROR"):
+            s._connect_worker()
+        self.assertTrue(link.closed)
+        self.assertEqual(s.state, "error")
+        self.assertIsNone(s.link)
+
+    def test_disconnect_during_open_cannot_resurrect_session(self):
+        from unittest.mock import patch
+        link = FakeLink()
+        s = server.CameraSession(make_args())
+        link.open = s.disconnect
+        with patch.object(server, "Datalink", return_value=link), \
+                self.assertLogs("panel", level="ERROR"):
+            s._connect_worker()
+        self.assertTrue(link.closed)
+        self.assertEqual(s.state, "idle")
+        self.assertIsNone(s.link)
+
+    def test_disconnect_clears_authority_and_pending_preroll(self):
+        from unittest.mock import Mock
+        s = server.CameraSession(make_args())
+        s.link, s.stick = FakeLink(), FakeStick()
+        s.armed = True
+        s.owner = "core2"
+        s.clutch.state.engaged = True
+        timer = s._roll_timer = Mock()
+        s.preroll_until = 9999999999
+        stick = s.stick
+        s.disconnect()
+        timer.cancel.assert_called_once()
+        self.assertIn("abort", stick.calls)
+        self.assertFalse(s.armed)
+        self.assertFalse(s.clutch.active)
+        self.assertEqual(s.owner, "none")
+        self.assertEqual(s.preroll_until, 0)
+
+    def test_invalid_jog_values_never_reach_stick(self):
+        s = server.CameraSession(make_args())
+        s.link, s.stick = FakeLink(), FakeStick()
+        for value in (float("nan"), float("inf"), 2):
+            with self.assertRaises(ValueError):
+                s.set_axes(value, 0)
+            self.assertIsNone(s.stick.axes)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -586,6 +681,7 @@ class TestHandlerInputBoundaries(unittest.TestCase):
         raw = server.json.dumps(payload).encode("utf-8")
         handler = self._handler(
             path=path, headers={"Content-Length": str(len(raw)),
+                                "Content-Type": "application/json",
                                 "X-Osmo-Token": "correct-token"}, body=raw)
         handler.session = session
         replies = []
@@ -630,6 +726,7 @@ class TestHandlerInputBoundaries(unittest.TestCase):
             return {}
 
         session = SimpleNamespace(
+            _workspace_lock=__import__("threading").RLock(),
             log_take=called, capture_waypoint=called,
             timelapse_start=called, clear_lut=called, load_lut=called,
             play_segment=called, play=called,

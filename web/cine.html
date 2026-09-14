@@ -25,6 +25,10 @@
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box;}
+.hidden{display:none!important;}
+#btnStopMotion{position:absolute;top:10px;right:10px;z-index:20;min-height:44px;min-width:96px;border-radius:8px;border:1px solid var(--rec);background:#381716;color:#ffd5d0;font:600 12px system-ui;cursor:pointer;}
+button:focus-visible, a:focus-visible, select:focus-visible{outline:2px solid var(--live);outline-offset:3px;}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;}}
 html,body{height:100%;margin:0;background:#000;overscroll-behavior:none;}
 body{
   font:13px/1.35 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -274,6 +278,12 @@ body.rec #btnRec{ border-radius:17px; }
        display:none;}
 #punch.on{ display:block; }
 
+#preroll{position:absolute; left:50%; top:56px; transform:translateX(-50%); z-index:9;
+         display:none; align-items:center; gap:8px; padding:6px 12px; font-size:11px;
+         letter-spacing:.06em;}
+#preroll.on{ display:flex; }
+#preroll .v{font-family:var(--mono); font-weight:700; font-size:16px; color:var(--warn);}
+
 /* ---------------- density ladder ----------------
    SETUP   everything.
    OPERATE the picture, exposure, tally and whatever scopes were asked for.
@@ -301,9 +311,15 @@ body.peek #btnRec{ width:62px; height:62px; opacity:1; }
        font-size:12.5px;z-index:9;opacity:0;transition:opacity .2s;pointer-events:none;}
 #toast.on{ opacity:1; }
 #nofeed{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);
-        font-size:13px;}
+        font-size:13px; text-align:center; padding:24px;}
+#nofeed .t1{font-size:13px;letter-spacing:.08em;color:var(--dim);line-height:1.6;}
+#nofeed .t2{font-size:12px;color:var(--faint);margin:6px 0 16px;line-height:1.5;}
+#nofeed .gobtn{display:inline-grid;place-items:center;min-height:44px;padding:0 20px;
+              border:2px solid var(--live);color:var(--live);text-decoration:none;
+              font-size:11px;letter-spacing:.1em;}
 a.back{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);z-index:4;
-       color:var(--faint);font-size:10px;text-decoration:none;}
+       color:var(--faint);font-size:10px;text-decoration:none;
+       min-height:44px;display:grid;align-items:center;padding:0 10px;}
 @media (max-width:860px){
   .fld{ min-width:58px; padding:5px 9px; } .fld .v{ font-size:14px; }
   #drawerGrid{ grid-template-columns:repeat(5,58px); }
@@ -351,7 +367,27 @@ a.back{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);z-index:
   #lutbar{ bottom:150px; }
   #lutbar.raised{ bottom:150px; }
   #hud{ max-width:calc(100vw - 24px); }
-  .back{ display:none; }
+  /* Still reachable in portrait -- moved off the bottom band, which is
+     already carrying the strip and tools, and onto the top edge instead. */
+  a.back{ position:absolute; left:auto; right:8px; top:8px; bottom:auto;
+          transform:none; background:var(--pill); border:1px solid var(--edge);
+          border-radius:8px; padding:0 10px; z-index:6; }
+  /* Dedicated portrait bands: status, picture, thumb controls, exposure.
+     No floating control occupies the no-feed message or another target. */
+  #hud{top:8px;left:8px;right:8px;transform:none;max-width:none;min-height:44px;}
+  #hud .seg{padding:6px 10px;}
+  #segFmt{display:none;}
+  #leftcol{top:64px;right:auto;}
+  a.back{top:64px;color:var(--ink);font-size:12px;}
+  #btnStopMotion{top:64px;right:142px;}
+  #nofeed{inset:124px 16px 345px;text-align:center;}
+  #strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));}
+  #strip .fld{min-height:52px;min-width:0;}
+  #gimbal{bottom:132px;left:16px;transform:none;}
+  #rightcol{bottom:190px;left:auto;right:16px;display:grid;grid-template-columns:60px 60px;gap:12px;}
+  #tools{bottom:128px;right:16px;}
+  #scopes{bottom:340px;}
+  #drawer{bottom:124px;max-height:calc(100dvh - 244px);overflow:auto;}
 }
 </style>
 
@@ -362,9 +398,17 @@ a.back{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);z-index:
     <canvas id="assist"></canvas>
     <canvas id="guides"></canvas>
   </div>
-  <div id="nofeed">waiting for live view&hellip;</div>
+  <div id="nofeed">
+    <div id="nofeedWait">waiting for live view&hellip;</div>
+    <div id="nofeedDisc" class="hidden">
+      <div class="t1">NOT CONNECTED</div>
+      <div class="t2">Connect the camera in Shot Studio.</div>
+      <a class="gobtn" href="/panel#rig">OPEN SHOT STUDIO &rarr;</a>
+    </div>
+  </div>
   <div id="tally"></div>
   <div id="punch" class="pill">PUNCH 2&times;</div>
+  <div id="preroll" class="pill"><span class="k">PRE-ROLL</span><span class="v" id="prerollN">0</span></div>
 
   <div id="hud" class="pill">
     <div class="seg"><i class="recdot"></i><span id="recWord">STBY</span></div>
@@ -392,11 +436,11 @@ a.back{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);z-index:
   </div>
 
   <div id="rightcol">
-    <button class="round" id="btnSettings" title="engineering panel">
+    <button class="round" id="btnSettings" title="Shot Studio rig settings">
       <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
            stroke-width="1.6"><circle cx="10" cy="10" r="2.6"/>
         <path d="M10 2.2v2M10 15.8v2M17.8 10h-2M4.2 10h-2M15.5 4.5l-1.4 1.4M5.9 14.1l-1.4 1.4M15.5 15.5l-1.4-1.4M5.9 5.9L4.5 4.5"/></svg></button>
-    <button class="round" id="btnMedia" title="media on the camera">
+    <button class="round" id="btnMedia" title="Shot Studio take review">
       <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
            stroke-width="1.6"><rect x="3" y="5.5" width="14" height="10" rx="2"/>
         <path d="M3 12.6l3.6-3.2 3 2.6 3-2.8L17 12"/><circle cx="7.4" cy="8.6" r="1"/></svg></button>
@@ -475,10 +519,16 @@ a.back{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);z-index:
   </div>
 
   <div id="toast" class="pill"></div>
-  <a class="back" href="/panel">&larr; engineering panel</a>
+  <button type="button" id="btnStopMotion">Stop motion</button>
+  <a class="back" href="/panel">&larr; Shot Studio</a>
 </div>
 
 <script src="/monitor.js"></script>
+<script src="/session.js"></script>
+<link rel="stylesheet" href="/ui.css">
+<link rel="stylesheet" href="/studio-settings.css">
+<script src="/studio-settings.js"></script>
+<script src="/ui.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -642,8 +692,12 @@ function squeezeFactor() {
 function applySqueeze() {
   const k = squeezeFactor();
   const sx = on.mirror ? -1 : 1;
-  $("pic").style.transform = (k === 1 && sx === 1)
-    ? "" : `scaleX(${sx}) scaleY(${(1 / k).toFixed(4)})`;
+  // Punch (pixel magnification for focus checks) rides in the same
+  // transform. Two writers of style.transform means whichever ran last
+  // wins and the other silently stops working -- exactly the desqueeze
+  // vs. mirror bug this function already exists to avoid.
+  $("pic").style.transform = (k === 1 && sx === 1 && punch === 1)
+    ? "" : `scaleX(${sx}) scaleY(${(1 / k).toFixed(4)}) scale(${punch})`;
   const note = $("frameNote");
   if (note) {
     note.textContent = k === 1 ? "" : `desqueezed ${k}x — preview only`;
@@ -825,13 +879,17 @@ requestAnimationFrame(loop);
 /* ---------------------------------------------------------------- status */
 const FIELDS = [
   {k:"ISO", id:"fIso", set:"iso", opts:["auto",100,200,400,800,1600,3200,6400]},
-  {k:"SHUTTER", id:"fShut", set:"shutter", opts:["1/25","1/50","1/100","1/200","1/320","1/500","1/1000"]},
+  // The dial shows a fraction, but the camera opcode and this field's own
+  // opts take the bare denominator -- posting the string "1/50" straight
+  // through is a 400 the server has to reject via int().
+  {k:"SHUTTER", id:"fShut", set:"shutter", opts:[25,50,100,200,320,500,1000],
+   fmt:v => "1/" + v},
   // Shutter ANGLE, not speed. The angle is what sets the motion look, and it
   // has to follow the frame rate to stay constant -- 1/48 is 180 degrees at
   // 24fps and 150 at 20. Tapping it snaps to the film standard for whatever
   // rate is current, which is the setting an operator wants ninety percent of
   // the time and the one that is most annoying to work out by hand.
-  {k:"ANGLE", id:"fAngle", tap: () => post("/api/shutter", {angle: 180})},
+  {k:"ANGLE", id:"fAngle", tap: () => { if (connected) post("/api/shutter", {angle: 180}); else toast("not connected"); }},
   {k:"MODE", id:"fMode"},
   {k:"WB", id:"fWb", set:"wb", opts:["auto",2800,4000,5000,5500,6500,7500]},
   {k:"FOCUS", id:"fFocus"},
@@ -850,10 +908,14 @@ for (const f of FIELDS) {
   $("strip").appendChild(b);
 }
 function cycle(f) {
-  const cur = $(f.id).textContent;
-  const i = f.opts.findIndex(o => String(o) === cur);
+  if (!connected) { toast("not connected"); return; }
+  const shown = $(f.id).textContent;
+  const cur = f.fmt ? f.opts.find(o => f.fmt(o) === shown) : shown;
+  const i = f.opts.findIndex(o => String(o) === String(cur));
   const next = f.opts[(i + 1) % f.opts.length];
-  $(f.id).textContent = next;
+  // No optimistic write here: this field is a request, not a reading, and
+  // the camera never confirms it. The next poll shows what was actually
+  // asked for, derived from the host's own state alone.
   post("/api/camera", {set: f.set, value: next});
 }
 function setField(id, v) {
@@ -917,24 +979,73 @@ function tlBand(t) {
 
 $("tlbStop").onclick = () => post("/api/timelapse/stop", {});
 
+let lastOkAt = 0;
+let hostUnavailable = false;
+function hostLost() {
+  if (connected) toast("host connection lost");
+  connected = false;
+  hostUnavailable = true;
+  release();                                  // stop the stick immediately
+  held = false; dirty = false; tilt = pan = 0; // no delayed neutral packet on recovery
+  recording = false;
+  recStartedAt = null;
+  $("recWord").textContent = "HOST LOST";
+  $("recWord").title = "Camera recording state is unknown; check the camera";
+  $("preroll").classList.remove("on");
+  tlBand(null);
+  $("linkGlyph").className = "bad";
+  $("segLink").title = "Host lost — camera status unknown";
+  document.body.classList.remove("rec", "confirmed");
+  $("nofeed").style.display = "grid";
+  $("nofeedWait").classList.add("hidden");
+  $("nofeedDisc").classList.remove("hidden");
+  $("nofeedDisc").querySelector(".t1").textContent = "HOST LOST";
+  $("nofeedDisc").querySelector(".t2").textContent = "Restore the host connection. Camera state is unknown.";
+}
+
 async function poll() {
   let s;
-  try { s = await (await fetch("/api/status")).json(); } catch (e) { connected = false; return; }
+  try {
+    const r = await fetch("/api/status", {signal: AbortSignal.timeout(2000)});
+    if (!r.ok) throw new Error("status " + r.status);
+    s = await r.json();
+    if(OsmoSession.isRetired(s))return;
+    OsmoSession.observe(s);
+  } catch (e) {
+    if (Date.now() - lastOkAt > 2000) hostLost();
+    return;
+  }
+  lastOkAt = Date.now();
+  hostUnavailable = false;
   tlBand(s.timelapse);
-  connected = s.state === "connected";
+  connected = s.state === "connected" && s.link_healthy !== false;
+  $("nofeedDisc").querySelector(".t1").textContent = "NOT CONNECTED";
+  $("nofeedDisc").querySelector(".t2").textContent = "Connect the camera in Shot Studio.";
+  $("nofeedWait").textContent = s.live?.error || "Waiting for live view…";
   const haveFrame = !!(s.live && s.live.have_frame);
   $("nofeed").style.display = haveFrame ? "none" : "grid";
+  $("nofeedWait").classList.toggle("hidden", !connected);
+  $("nofeedDisc").classList.toggle("hidden", connected);
   if (connected && !feed.src) feed.src = "/api/stream";
 
   const R = s.recording || {};
   recording = !!R.on;
   document.body.classList.toggle("rec", recording);
-  // "REC ACK" says plainly that the command was accepted and nothing has
-  // confirmed it. Out loud, not buried in a tooltip.
+  // The record opcode is unverified and nothing reports the tally back, so
+  // the word on screen says what actually happened: a request was sent, not
+  // that the camera is rolling.
   document.body.classList.toggle("confirmed", !!R.reported);
-  $("recWord").textContent = !recording ? "STBY" : (R.reported ? "REC" : "REC ACK");
+  $("recWord").textContent = !recording ? "STBY"
+    : (R.reported ? "REC" : "REC REQUESTED");
+  $("recWord").title = recording && !R.reported
+    ? "request sent -- verify camera, this app cannot confirm recording" : "";
   if (recording && recStartedAt == null) recStartedAt = performance.now();
   if (!recording) recStartedAt = null;
+
+  const pr = s.preroll || {};
+  const counting = pr.until && pr.until > Date.now() / 1000;
+  $("preroll").classList.toggle("on", !!counting);
+  if (counting) $("prerollN").textContent = Math.max(0, Math.ceil(pr.until - Date.now() / 1000));
 
   // One glyph, not a developer's frame counter. Detail lives behind a click.
   const fps = (s.live && s.live.fps) || 0;
@@ -943,17 +1054,16 @@ async function poll() {
   $("segLink").title = `feed ${fps.toFixed(1)} fps · resyncs ${
     (s.live && s.live.resyncs) ?? "—"} · decode errors ${(s.live && s.live.decode_errors) ?? "—"}`;
 
-  const cam = s.camera || {}, st = s.setup || {};
-  setField("fIso", cam.iso ?? st.iso);
-  setField("fShut", cam.shutter ?? st.shutter);
+  const cam = s.camera || {}, sh = s.shutter || {};
+  setField("fIso", cam.iso ?? null);
+  setField("fShut", sh.speed_label ?? null);
   setField("fMode", cam.manual == null ? null : (cam.manual ? "Manual" : "Auto"));
-  setField("fWb", cam.wb ?? st.wb);
+  setField("fWb", cam.wb ?? null);
   setField("fFocus", cam.focus_continuous == null ? null : (cam.focus_continuous ? "AF-C" : "AF-S"));
 
   // The angle rests on a frame rate nothing reports back, so when the rate is
   // only assumed the label is marked with a question mark rather than the
   // number being presented as read.
-  const sh = st.shutter || {};
   setField("fAngle", sh.angle_label || null);
   const aw = $("fAngle_w");
   aw.classList.toggle("flicker", !!sh.flickers);
@@ -982,11 +1092,20 @@ async function poll() {
                  setTravel("tvDown", L.pitch.known ? L.pitch.high : 0); }
   if (L.yaw)   { setTravel("tvRight", L.yaw.known ? L.yaw.high : 0);
                  setTravel("tvLeft", L.yaw.known ? L.yaw.low : 0); }
-  if (s.zoom != null) $("zoomVal").textContent = (+s.zoom).toFixed(1);
+  // s.zoom does not exist on this status shape -- what the panel last asked
+  // for lives on the camera state, same as every other exposure field.
+  if (cam.zoom != null) $("zoomVal").textContent = (+cam.zoom).toFixed(1);
   if (Array.isArray(s.ramps) && s.ramps.length) ramps = s.ramps.map(r => r.name);
   if (s.ramp && s.ramp !== rampName) { rampName = s.ramp; showRamp(); }
 }
 setInterval(poll, 250); poll();
+document.addEventListener("visibilitychange", () => {
+  // A backgrounded tab can have its timers throttled well past the 2s
+  // threshold; coming back must not keep showing whatever was last painted.
+  if (document.hidden) { release(); return; }
+  if (Date.now() - lastOkAt > 2000) hostLost();
+  poll();
+});
 
 /* Counted locally from the moment the record command was accepted. That makes
    it elapsed time, not camera timecode, and it says so: a number that looks
@@ -1001,10 +1120,11 @@ requestAnimationFrame(tick);
 
 /* ---------------------------------------------------------------- controls */
 async function post(path, body) {
-  try {
-    await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
-                       body: JSON.stringify(body || {})});
-  } catch (e) { toast("not connected"); }
+  if (hostUnavailable && path !== "/api/stop") return {ok:false,error:"Host lost"};
+  const j=await OsmoSession.post(path,body);
+  if(j.ok===false) toast(j.error);
+  if(j.workspace?.warning) toast(j.workspace.warning);
+  return j;
 }
 let toastTimer = null;
 function toast(msg) {
@@ -1013,15 +1133,15 @@ function toast(msg) {
 }
 
 $("btnRec").onclick = () => {
+  if (!connected) { toast("not connected"); return; }
+  // No optimistic flip: the record opcode is unverified on this camera, and
+  // a tally that changes before the request is even sent is a claim the
+  // controller cannot back up. The next poll shows what the host holds.
   post("/api/action", {name: recording ? "record_stop" : "record_start"});
-  // Optimistic: the record opcode is unverified on this camera and the tally
-  // must never be the thing that lags. The next poll corrects it.
-  recording = !recording;
-  document.body.classList.toggle("rec", recording);
-  if (recording) recStartedAt = performance.now();
 };
-$("btnSettings").onclick = () => location.href = "/panel";
-$("btnMedia").onclick = () => toast("media browser: not built yet");
+$("btnSettings").onclick = () => location.href = "/panel#rig";
+$("btnStopMotion").onclick = () => { release(); dirty = false; post("/api/stop"); };
+$("btnMedia").onclick = () => location.href = "/panel#review";
 $("segLink").onclick = () => toast($("segLink").title);
 
 const DENSITY = ["setup", "operate", "clean"];
@@ -1069,10 +1189,12 @@ $("rampChip").onclick = () => {
 };
 
 $("zoomPill").onclick = () => {
+  if (!connected) { toast("not connected"); return; }
   const steps = [1,2,3,4];
   const cur = parseFloat($("zoomVal").textContent) || 1;
   const next = steps[(steps.indexOf(Math.round(cur)) + 1) % steps.length];
-  $("zoomVal").textContent = next.toFixed(1);
+  // No optimistic write: the readout is derived from the host's camera
+  // state on the next poll, never from what was tapped.
   post("/api/camera", {set:"zoom", value:next});
 };
 
@@ -1081,7 +1203,7 @@ $("zoomPill").onclick = () => {
 let punch = 1;
 $("pic").addEventListener("dblclick", () => {
   punch = punch === 1 ? 2 : punch === 2 ? 4 : 1;
-  $("pic").style.transform = (on.mirror ? "scaleX(-1) " : "") + `scale(${punch})`;
+  applySqueeze();   // one transform writer: composes with mirror and desqueeze
   $("punch").classList.toggle("on", punch !== 1);
   $("punch").textContent = "PUNCH " + punch + "×";
 });
@@ -1118,6 +1240,8 @@ setInterval(() => { if (!connected || !dirty) return; dirty = held;
 // Keyboard, for the laptop case. A monitor you can only drive with a thumb is
 // half a monitor sitting on a desk during a setup.
 window.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") { $("btnStopMotion").click(); return; }
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(ev.target.tagName)) return;
   if (ev.repeat || ev.metaKey || ev.ctrlKey) return;
   const k = ev.key.toLowerCase();
   if (k === "d") setDensity(density + 1);
@@ -1130,4 +1254,8 @@ window.addEventListener("keydown", ev => {
   else return;
   ev.preventDefault();
 });
+// Monitor picture, tally and emergency stop are intentionally fixed. Settings
+// and the field guide use the same responsive components as the Studio.
+const monitorUtilities=document.createElement('div');monitorUtilities.className='osmo-monitor-utilities';$('tools').append(monitorUtilities);
+createSurfaceUI({host:monitorUtilities,post,reload:()=>location.reload(),canArrange:()=>!held&&!recording});
 </script>
