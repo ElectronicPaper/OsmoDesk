@@ -23,18 +23,30 @@ the serial driver remains here only as an optional integration adapter.
 
 ## A look at the setup
 
-![OsmoDesk laptop browser and host beside a Pocket 4P](docs/images/desktop-usage-illustration.png)
+![OsmoDesk Shot Studio on a laptop beside a Pocket 4P; AI-generated setup with a credited Pocket 3 sample still](docs/images/osmodesk-cinema-workspace-illustration.png)
 
-Desktop: the computer runs both the Python host and the browser controls.
+The current Shot Studio layout, illustrated beside a Pocket 4P. The computer runs
+both the Python host and the browser controls. This is an **AI-generated setup
+illustration**, not a real photograph or a live-camera test. The monitor contains
+a licensed Pocket 3 sample still by AConde11, not footage from the pictured rig.
+
+[Actual desktop UI capture](docs/images/studio-shoot-demo-20260915.png) ·
+[Night-scene demo](docs/images/studio-night-demo-20260915.png) ·
+[Cinema mobile UI capture](docs/images/cinema-mobile-demo-20260915.png)
+
+These captures use the real interface with camera-free demo data and a saved panel
+arrangement. No private camera footage is included. The stills are examples of
+Pocket 3 imagery, **not a claim of tested Pocket 3 compatibility**.
+See [photo sources and reuse licenses](docs/images/demo-samples/README.md).
 
 ![OsmoDesk phone browser with a computer host and Pocket 4P](docs/images/mobile-usage-illustration.png)
 
 Mobile: the phone accesses the computer host over your trusted LAN; this is not
 a standalone phone-to-camera app.
 
-These are **AI-generated usage illustrations**, not real setup photographs or
-evidence of successful operation. The screens use disconnected interface references.
-See [actual static-page captures and generation notes](docs/images/README.md).
+The earlier mobile setup image is also AI-generated and uses a disconnected
+interface reference. Generated screens are illustrative, not pixel-exact.
+See [all captures, earlier illustrations and generation notes](docs/images/README.md).
 
 ## Run locally
 
