@@ -1,34 +1,37 @@
-# OsmoDesk update: repeatable Pocket moves, motion timelapse and a proper shot workspace (WIP)
+# I'm turning my Pocket 4P into a programmable camera rig — OsmoDesk update (WIP)
 
-I started OsmoDesk because I wanted to plan and repeat shots with my Pocket 4P,
-not just press record from another screen. It's still a work in progress, but
-it's grown into quite a bit more than a browser remote.
+I wanted more from my Pocket 4P than a remote record button: set up a shot,
+shape the movement, rehearse it, then run it again without starting from scratch.
+That's why I started building OsmoDesk.
 
-Some recent additions, alongside the existing controls:
+It's still WIP, but there's a lot to play with now:
 
-- A shot workspace for saving framing points, setting easing and holds, and
-  previewing the path before moving the camera.
-- Motion timelapse, and recording workflows that wait for the camera to confirm
-  recording before the move starts.
-- A/B autofocus targets. AF-S gave me a visible near/far/near change on my 4P.
-  Important caveat: this also changes spot metering; it isn't manual rack focus.
-- Rearrangeable panels, phone controls, live view, scopes, zebras, peaking and LUT
-  monitoring, plus take notes and motion-data exports.
-- Optional AI timing suggestions for points you've already set. Bring your own
-  API key, preview the suggestions and choose what to apply. AI can't move or
-  record with the camera.
+- **Plan the shot:** save framing points, adjust easing and holds, and preview
+  the path before the camera moves.
+- **Make it repeatable:** programmed moves, motion timelapse, take notes and
+  motion-data exports. The record-and-move workflow waits for recording confirmation.
+- **See what you're doing:** cinema monitoring with guides, zebras, peaking,
+  waveform, histogram, vectorscope and viewing LUTs.
+- **Make it yours:** rearrange the workspace and control it from a desktop or phone.
 
-Repo: https://github.com/ElectronicPaper/OsmoDesk
+The new optional extra is **AI Shot Copilot**. Give it a brief like “a slow
+reveal with a longer hold at the end” and it offers two timing treatments for
+framing points you've already set. Preview them, apply one, or keep your original.
+It uses your own OpenAI API key; the rest of OsmoDesk works without AI.
+You review the planning data before it's sent to OpenAI; no footage is uploaded.
+AI cannot connect, move or record the camera.
 
-You still need a computer or supported rig host running the Python server;
-the phone is a control screen. I've tested on my Pocket 4P, not the Pocket 3 or 4.
+[Repo and setup instructions](https://github.com/ElectronicPaper/OsmoDesk)
 
-The riverside and night-shoot setup images are AI-generated, based closely on
-the actual UI. Guides, zebras, peaking and scopes in the linked demo screenshots
-are rendered by the app over [credited Pocket 3 sample photos](https://github.com/ElectronicPaper/OsmoDesk/blob/main/docs/images/demo-samples/README.md),
-not live footage. Real setup photos will follow.
+You need a computer or supported rig host running the Python server; the phone
+is a control screen. Tested on my **Pocket 4P only**, not Pocket 3 or 4.
 
-I still wish DJI would offer an official Pocket Bluetooth SDK. There are so many
-useful little tools people could build around these cameras.
+The setup images are AI-generated, with screens based on the real interface.
+The country scenes and their demo pictures are generated too, not real test
+footage. Other demo captures use [credited sample photos](https://github.com/ElectronicPaper/OsmoDesk/blob/main/docs/images/demo-samples/README.md).
+Real setup photos will follow.
 
-If you try it, I'd love to hear what would make it useful for your own shots.
+I still wish DJI offered an official Pocket Bluetooth SDK—there's a lot the
+community could build for these cameras.
+
+What would you try first: product shots, architectural reveals, or motion timelapse?

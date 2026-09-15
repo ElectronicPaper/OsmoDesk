@@ -1,5 +1,47 @@
 # OsmoDesk images
 
+## Shot Studio and three more countries — 2026-09-15
+
+### Compose and Director
+
+![Compose in an architecture workshop](osmodesk-studio-compose-illustration.png)
+
+![Director rehearsal in a stone courtyard](osmodesk-studio-director-illustration.png)
+
+These two 1536 × 1024 AI-generated setup illustrations show the actual
+**Shot Studio** Compose and Director layouts, not the cinema monitor.
+The camera heads point toward the model/courtyard rather than the operator.
+They use [Compose](studio-compose-demo-20260915.png) and
+[Director](studio-director-demo-20260915.png) UI references captured at 1440 × 1120
+from source `b58e05e`, using a synthetic `Architectural reveal` draft.
+
+The temporary loopback host started disconnected and rejected camera/AI/mutation
+requests. Only the non-actuating `/api/director/preview` POST was allowed for the
+Director chart; its arithmetic came from the canonical preview engine. The
+capture-only footer identifies the demo. Both pages loaded without JavaScript
+errors. The host was stopped afterward. No camera session or private user state
+was used. Generated screen renderings are illustrative, not pixel-exact.
+
+### Country variants
+
+- [Kyoto, Japan](osmodesk-kyoto-japan-illustration.png): lantern-lit lane, framing
+  guides, illustrative peaking and scopes.
+- [Dolomites, Italy](osmodesk-dolomites-italy-illustration.png): mountain terrace,
+  framing guides and illustrative zebra/scope overlays.
+- [Marrakech, Morocco](osmodesk-marrakech-morocco-illustration.png): rooftop view,
+  framing guides and illustrative scope graphics.
+
+These three 1536 × 1024 images are entirely AI-generated, including their location
+views, on-screen pictures and scope graphics. They are not newly sourced Pocket
+sample photographs and do not prove the depicted scope measurements. Each uses
+the existing cinema interface as a layout reference and carries an AI/demo label.
+The camera heads were corrected to aim into the scene, showing their backs rather
+than pointing the lenses toward the viewer. The two earlier location illustrations
+below received the same correction; their original licensed-photo credits remain.
+
+All five new illustrations and the orientation corrections used the **built-in
+image-generation tool**. [Full prompts and reference notes](location-studio-prompts.md).
+
 ## Location scenes with active overlays — 2026-09-15
 
 ![Riverside location illustration](osmodesk-riverside-overlay-illustration.png)
@@ -11,7 +53,9 @@ The locations were invented to relate to the sample pictures, not to document
 the actual photographers' setups. Both preserve the Pocket 4P equipment identity
 and show the required laptop host. Screens are AI-rendered interpretations of the
 actual captures below, not pixel-exact screenshots or connected-camera evidence.
-All earlier illustrations remain available unchanged.
+The earlier indoor illustrations remain unchanged. These two location files were
+subsequently corrected so the gimbal heads face the scenery; the previous versions
+remain available in Git history.
 
 Actual camera-free captures from source `204884b` (runtime unchanged from the
 earlier source `52044c8`):

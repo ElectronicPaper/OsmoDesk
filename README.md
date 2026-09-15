@@ -21,6 +21,20 @@ with access to the camera network. This is a browser-based controller, not a pac
 Core2 firmware belongs exclusively to OsmoPalm. OsmoDesk does not require a Core2;
 the serial driver remains here only as an optional integration adapter.
 
+## Inside Shot Studio
+
+![OsmoDesk Compose workspace with framing points and timing controls; AI-generated setup using an actual UI reference](docs/images/osmodesk-studio-compose-illustration.png)
+
+**Compose:** define framing points, easing and holds before moving the camera.
+[Actual camera-free Compose capture](docs/images/studio-compose-demo-20260915.png).
+
+![OsmoDesk Director workspace with a three-point path and timing rehearsal; AI-generated setup using an actual UI reference](docs/images/osmodesk-studio-director-illustration.png)
+
+**Director:** inspect the angular path and rehearse its timing without camera
+movement. [Actual camera-free Director capture](docs/images/studio-director-demo-20260915.png).
+Both setup scenes are AI-generated from real interface references; they are not
+physical test photographs. The captures use a synthetic three-position draft.
+
 ## A look at the setup
 
 ![OsmoDesk riverside demo: a Pocket 4P beside a laptop showing a sunset with framing guides, zebras, waveform and histogram; AI-generated illustration](docs/images/osmodesk-riverside-overlay-illustration.png)
@@ -54,6 +68,12 @@ not invented graphs or measurements from a connected camera.
 Phones access the host over your trusted LAN; this is not a standalone
 phone-to-camera app. See [all captures, earlier illustrations and generation
 notes](docs/images/README.md).
+
+More imagined locations: [Kyoto, Japan](docs/images/osmodesk-kyoto-japan-illustration.png) ·
+[Dolomites, Italy](docs/images/osmodesk-dolomites-italy-illustration.png) ·
+[Marrakech, Morocco](docs/images/osmodesk-marrakech-morocco-illustration.png).
+These three scenes, their on-screen pictures and scope graphics are AI-generated
+illustrations—not additional Pocket sample photographs or measured scope captures.
 
 ## Run locally
 
