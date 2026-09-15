@@ -66,6 +66,20 @@ authorized Luna/low Responses request used only a synthetic three-position shot:
 the local sampled check. This is not live-generation proof for the other models
 or all effort levels, and does not prove cinematic quality on physical hardware.
 
+The later 2026-09-15 live matrix exercised all four advertised models at each of
+low, medium and high effort through the app's disclosure, explicit send, job and
+local validation path. All 12 requests completed with the exact requested model
+ID, without retries. Only a synthetic three-position shot was shared: no camera
+footage, images, operator notes or real shot labels. The original draft was restored.
+
+All 24 treatments passed structural validation; 23 passed local motion preflight.
+One Astra/high treatment failed preflight and remained unavailable for application.
+No treatment was applied, and AI never armed, moved or recorded the camera.
+Combined usage was 14,471 tokens; the conservative reserved ceiling was $1.207885,
+not an invoice. The operator approved a temporary $2 ceiling; the $1 setting was
+restored without clearing the process's reservation accounting. These checks
+verify provider integration, not deterministic creative quality or billing rates.
+
 ## Verification scope
 
 Focused tests cover provider errors, strict schema/type/range validation,

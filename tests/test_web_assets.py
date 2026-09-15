@@ -246,10 +246,11 @@ class TestMonitorHonesty(unittest.TestCase):
     page = PAGES[1]
 
     def test_the_tally_distinguishes_requested_from_reported(self):
-        """The record opcode is unverified and nothing reports the tally back,
-        so an unqualified red border would assert something we cannot know."""
+        """A request is not proof; a solid red border needs fresh tally feedback."""
         self.assertTrue("REC REQUESTED" in self.page.script)
-        self.assertTrue("verify camera" in self.page.script)
+        self.assertIn("waiting for fresh camera feedback", self.page.script)
+        self.assertIn("fresh tally the camera", self.page.style)
+        self.assertNotIn("nothing reports the tally back", self.page.html)
         self.assertNotIn("REC ACK", self.page.script)
         self.assertIn("body.rec.confirmed", self.page.style)
         self.assertRegex(self.page.style,

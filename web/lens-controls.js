@@ -17,12 +17,13 @@
       card.innerHTML = `
         <header class="ol-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg><div><h3>Lens &amp; Focus</h3><p>Camera readback · deliberate control</p></div></header>
         <p class="ol-gate" data-lens="gate">Connect a camera to use lens controls.</p>
-        <div class="ol-readings"><div><span>Reported focus</span><strong data-lens="mode">Unknown</strong></div><div><span>Reported zoom</span><strong data-lens="zoom">Unknown</strong></div></div>
+        <div class="ol-readings"><div><span>Reported focus</span><strong data-lens="mode">Unknown</strong></div><div><span>Reported zoom</span><strong data-lens="zoom">Unknown</strong></div><div><span>Reported capture</span><strong data-lens="capture-reported">Unknown / stale</strong></div></div>
         <fieldset><legend>Autofocus mode</legend><div class="ol-row"><button type="button" data-lens="single" title="Request single autofocus; camera readback is shown above">AF-S · Single</button><button type="button" data-lens="continuous" title="Request continuous autofocus; camera readback is shown above">AF-C · Continuous</button></div></fieldset>
+        <fieldset><legend>Capture mode</legend><p class="ol-muted">Choose Photo before stills or timelapse; return to Video for recording. Camera may keep separate settings per mode.</p><div class="ol-row"><button type="button" data-lens="photo" aria-pressed="false" title="Request Photo capture mode; camera-reported mode remains separate">Photo</button><button type="button" data-lens="video" aria-pressed="false" title="Request Video capture mode; camera-reported mode remains separate">Video</button></div><p class="ol-muted" data-lens="capture-gate">Capture mode requests require fresh camera readback.</p></fieldset>
         <fieldset><legend>Manual zoom</legend><label class="ol-zoom-label">Requested factor <output data-lens="zoom-draft">1.0×</output><input data-lens="range" type="range" min="1" max="12" step="0.1" value="1" aria-label="Requested zoom factor" title="Release or finish a keyboard change to request zoom"></label><div class="ol-row"><button type="button" data-lens="minus" title="Request 0.1× less than the camera-reported zoom">− Zoom out</button><button type="button" data-lens="plus" title="Request 0.1× more than the camera-reported zoom">+ Zoom in</button></div><p class="ol-muted" data-lens="zoom-gate">Zoom needs fresh zoom and color readback.</p></fieldset>
         <p class="ol-muted">Manual focus-distance control is not available.</p>
         <details class="ol-refocus"><summary>Refocus A / B <span>Autofocus targets</span></summary><div class="ol-refocus-body">
-          <p class="ol-disclosure">Refocus also moves spot exposure metering; it does not control focus distance or pull speed.</p>
+          <p class="ol-disclosure">Refocus also moves spot exposure metering; it does not control focus distance or pull speed. OsmoDesk cannot read or restore the previous metering mode. Review and restore metering on the camera or in DJI Mimo.</p>
           <p class="ol-muted" data-lens="point">Reported target: unknown. A target report does not prove sharpness.</p>
           <div class="ol-row ol-coordinates"><label>X · left → right<input data-lens="x" type="number" min="0" max="1" step="0.001" value="0.5" inputmode="decimal"></label><label>Y · top → bottom<input data-lens="y" type="number" min="0" max="1" step="0.001" value="0.5" inputmode="decimal"></label></div>
           <button type="button" data-lens="use-point" title="Copy the reported target into these fields without sending a command">Use reported target</button>
@@ -57,6 +58,8 @@
         if (status.link_healthy !== true) return 'Camera link is unhealthy. Lens requests are disabled.';
         if (performance.now() - receivedAt >= FRESH_SECONDS * 1000) return 'Host status is stale. Lens requests are disabled.';
         if (status.move?.running || status.timelapse?.running) return 'Program running. Manual lens requests are disabled.';
+        if (status.camera_request_busy === true) return 'Camera request in flight. Awaiting the host; lens requests are disabled.';
+        if (finite(status.preroll?.until) && status.preroll.until > Date.now() / 1000) return 'Countdown is active. Lens requests are disabled.';
         if (busy) return 'Request in flight. Awaiting the host; camera readback remains separate.';
         return '';
       }
@@ -70,6 +73,16 @@
         if (color === 'd-log2') return 'Zoom unavailable in D-Log2. Change color deliberately elsewhere; this card never changes it.';
         return '';
       }
+      function captureBlocked() {
+        const gate = blocked();
+        if (gate) return gate;
+        if (status.owner !== 'none') return 'Release motion ownership before changing capture mode.';
+        if (!/^OsmoPocket4(?:P|Pro)?-/.test(status.ssid || '')) return 'Capture-mode switching is verified only for the Pocket 4 family.';
+        if (status.recording?.on === true || status.recording?.requested === true || reading('recording') !== false) return 'Camera must report standby; stop recording first.';
+        if (reading('playback') !== false) return 'Camera must report capture standby, not playback.';
+        if (!['photo', 'video'].includes(reading('capture_mode'))) return 'Capture mode needs fresh camera readback.';
+        return '';
+      }
       function enteredPoint() {
         const x = ref('x').value.trim(), y = ref('y').value.trim();
         const point = {x: Number(x), y: Number(y)};
@@ -77,8 +90,8 @@
       }
       function render() {
         if (destroyed) return;
-        const gate = blocked(), zoomGate = zoomBlocked(), mode = reading('focus_mode');
-        const zoom = reading('zoom'), point = reading('focus_point');
+        const gate = blocked(), zoomGate = zoomBlocked(), captureGate = captureBlocked(), mode = reading('focus_mode');
+        const zoom = reading('zoom'), point = reading('focus_point'), captureMode = reading('capture_mode');
         ref('gate').textContent = gate || 'Ready · requests require a deliberate action.';
         ref('mode').textContent = mode === 'single' ? 'AF-S · camera reported' : mode === 'continuous' ? 'AF-C · camera reported' : 'Unknown / stale';
         ref('zoom').textContent = finite(zoom) && zoom >= 1 && zoom <= 12 ? `${zoom.toFixed(1)}× · camera reported` : 'Unknown / stale';
@@ -86,6 +99,12 @@
           ref(name).disabled = !!gate;
           ref(name).setAttribute('aria-pressed', String(mode === name));
         }
+        ref('capture-reported').textContent = captureMode === 'photo' ? 'Photo · camera reported' : captureMode === 'video' ? 'Video · camera reported' : 'Unknown / stale';
+        for (const name of ['photo', 'video']) {
+          ref(name).disabled = !!captureGate;
+          ref(name).setAttribute('aria-pressed', String(captureMode === name));
+        }
+        ref('capture-gate').textContent = captureGate || 'Choose deliberately; camera-reported mode stays separate from requests.';
         for (const name of ['range', 'minus', 'plus']) ref(name).disabled = !!zoomGate;
         if (!zoomGate) {
           ref('minus').disabled = zoom <= 1;
@@ -135,8 +154,14 @@
         if (blocked() || !ref('ack').checked || !validPoint(point)) return;
         send('/api/camera/focus-target', {x: point.x, y: point.y, acknowledge_exposure: true}, `Refocus target ${pointText(point)}`);
       }
+      function requestCaptureMode(mode) {
+        if (captureBlocked() || !['photo', 'video'].includes(mode)) return;
+        send('/api/camera', {set: 'capture_mode', value: mode}, `Capture mode ${mode === 'photo' ? 'Photo' : 'Video'}`);
+      }
       on('single', 'click', () => send('/api/camera', {set: 'focus_continuous', value: false}, 'AF-S'));
       on('continuous', 'click', () => send('/api/camera', {set: 'focus_continuous', value: true}, 'AF-C'));
+      on('photo', 'click', () => requestCaptureMode('photo'));
+      on('video', 'click', () => requestCaptureMode('video'));
       on('range', 'input', () => { zoomEditing = true; ref('zoom-draft').textContent = `${Number(ref('range').value).toFixed(1)}×`; });
       on('range', 'change', () => { const value = Number(ref('range').value); zoomEditing = false; requestZoom(value); render(); });
       on('range', 'blur', () => { zoomEditing = false; render(); });

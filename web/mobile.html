@@ -12,8 +12,8 @@
    shared with the engineering panel and the Core2 box -- an operator who
    learns them on one surface must not have to relearn them on another.
 
-     red    = camera-confirmed recording only (the camera never reports its
-              tally over any command implemented here, so this is dark)
+     red    = camera-confirmed recording only, from a fresh reported tally
+              (amber = request sent but unconfirmed; UNKNOWN = stale/lost)
      amber  = uncertain, armed, constrained, near a travel stop
      green  = a cue released / repeatable take
      cyan   = the input owning the head right now
@@ -104,6 +104,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 #countdown{position:absolute; inset:0; background:rgba(0,0,0,.72); display:none; place-items:center; text-align:center;}
 #countdown.on{display:grid;}
 #countdown .n{font:500 88px/1 var(--mono); color:#fff;}
+#countdown.waiting .n{font-size:32px; letter-spacing:.08em;}
 #countdown .k{font-size:11px; letter-spacing:.2em; color:var(--warn);}
 
 .chiprow{display:flex; gap:6px; flex:none;}
@@ -297,7 +298,7 @@ a.link{color:var(--live);}
             <button type="button" class="chip" id="chipWb">--K</button>
           </div>
           <div id="zoomTxt"></div>
-          <div id="countdown"><div><div class="k">ROLLING · PRE-ROLL</div><div class="n" id="countN">3</div>
+          <div id="countdown"><div><div class="k" id="countK">ROLLING · PRE-ROLL</div><div class="n" id="countN">3</div>
             <div style="font-size:11px;color:var(--dim)">STOP cancels</div></div></div>
           <div class="nolink hidden" id="noLink">
             <div><div class="t1" id="noLinkTitle">NO CAMERA</div>
@@ -415,7 +416,7 @@ a.link{color:var(--live);}
 
         <div class="hr">
           <span class="syslabel">RECORD TALLY</span>
-          <div class="explain">The camera does not report its tally to this app over any command implemented here. REC stays amber and dashed for every take; red is reserved for camera-confirmed proof, which does not exist yet.</div>
+          <div class="explain">REC turns red only once the camera reports a fresh recording tally. It stays amber and dashed while a start/stop request is sent but unconfirmed, and shows UNKNOWN when telemetry is stale or the host connection is lost.</div>
         </div>
 
         <div class="hr">
@@ -749,7 +750,8 @@ function render(s) {
   recBox.classList.toggle("on", !!rec.on); recBox.classList.toggle("confirmed", confirmed);
   // Matches the wording on the cine monitor: a request was sent, not proof
   // the camera is rolling.
-  $("recWord").textContent = hostUnavailable ? "UNKNOWN" : rec.on ? (confirmed ? "REC" : "REC REQUESTED") : "STBY";
+  const waitingRecording = !!s.preroll?.waiting_recording;
+  $("recWord").textContent = hostUnavailable ? "UNKNOWN" : waitingRecording ? "REC…" : rec.on ? (confirmed ? "REC" : "REC REQUESTED") : "STBY";
   $("recWord").title = confirmed ? "Fresh camera-reported recording state" : "Recording state unconfirmed";
   if (rec.on && rec.elapsed_s != null) $("recTime").textContent = fmt(rec.elapsed_s);
   else if (rec.on && rec.since) $("recTime").textContent = fmt(Date.now()/1000 - rec.since);
@@ -812,8 +814,11 @@ function render(s) {
 
   const cd = s.preroll || {};
   const counting = cd.until && cd.until > Date.now()/1000;
-  $("countdown").classList.toggle("on", !!counting);
-  if (counting) $("countN").textContent = Math.max(0, Math.ceil(cd.until - Date.now()/1000));
+  const waitingForCountdown = !!cd.waiting_recording;
+  $("countdown").classList.toggle("on", !!waitingForCountdown || !!counting);
+  $("countdown").classList.toggle("waiting", waitingForCountdown);
+  $("countK").textContent = waitingForCountdown ? "WAITING FOR RECORDING" : "RECORDING CONFIRMED";
+  $("countN").textContent = waitingForCountdown ? "REC…" : Math.max(0, Math.ceil(cd.until - Date.now()/1000));
 
   // feel / lock chips
   $("feelChip").textContent = RAMP_LABEL[s.ramp] || (s.ramp || "").toUpperCase();
@@ -924,7 +929,7 @@ function render(s) {
   const tl = s.timelapse || {};
   $("lapseClip").textContent = ui.lapse.clip + "s"; $("lapseFps").textContent = ui.lapse.fps; $("lapseExp").textContent = ui.lapse.exp + "s";
   if (tl.running) {
-    $("lapseSum").textContent = `RUNNING · frame ${tl.frame}/${tl.frames}`; $("lapseSum").classList.add("ready");
+    $("lapseSum").textContent = `RUNNING · shutter ACK ${tl.frame}/${tl.frames} · files unverified`; $("lapseSum").classList.add("ready");
     $("lapseToggle").textContent = "STOP LAPSE"; $("lapseToggle").classList.add("running"); $("lapseToggle").classList.remove("dim");
   } else if (ui.lapse.planned && lapsePlan) {
     $("lapseSum").textContent = `${lapsePlan.frames} frames · ${(lapsePlan.shoot_s/60).toFixed(0)} min on set · ${lapsePlan.pitch_per_frame.toFixed(3)}° pitch / ${lapsePlan.yaw_per_frame.toFixed(3)}° yaw per frame${lapsePlan.warnings.length ? " · " + lapsePlan.warnings[0] : ""}`;

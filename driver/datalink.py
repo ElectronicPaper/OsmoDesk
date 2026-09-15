@@ -12,6 +12,7 @@ even though no data flows on it after the poke.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import socket
 import threading
@@ -40,6 +41,44 @@ HANDSHAKE_INTERVAL_S = 0.25
 TELEMETRY_STALE_S = 0.5
 
 
+class CameraRequest:
+    """One correlated command acknowledgment, never a saved-file receipt."""
+    def __init__(self, link, request):
+        self.link, self.request = link, request
+        self.event = threading.Event()
+        self.reply = None
+        self.error = None
+
+    def wait(self, timeout=1.5, cancel=None):
+        try:
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 0 < timeout <= 5:
+                raise ValueError('command timeout must be finite and between 0 and 5 seconds')
+            deadline = time.monotonic() + timeout
+            while True:
+                if self.error:
+                    raise RuntimeError(self.error)
+                if cancel is not None and cancel.is_set():
+                    raise RuntimeError('camera request cancelled; capture outcome may be unknown')
+                if not self.link.healthy:
+                    raise RuntimeError('camera link lost; command outcome unknown')
+                if self.event.is_set():
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('camera acknowledgment timed out; outcome unknown, no automatic retry')
+                self.event.wait(min(.02, remaining))
+            if not self.reply or not self.reply.payload:
+                raise RuntimeError('camera acknowledgment empty; outcome unknown')
+            status = self.reply.payload[0]
+            if status:
+                raise RuntimeError(f'camera rejected command with 0x{status:02X}; no retry')
+            return self.reply
+        finally:
+            with self.link._reply_lock:
+                if self.link._pending_replies.get(self.request.seq) is self:
+                    self.link._pending_replies.pop(self.request.seq, None)
+
+
 class Datalink:
     def __init__(self, host: str = transport.CAMERA_HOST, tcp_poke: bool = True):
         self.host = host
@@ -65,6 +104,9 @@ class Datalink:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._send_lock = threading.Lock()
+        self._reply_lock = threading.RLock()
+        self._pending_replies = {}
+        self._seq_lock = threading.Lock()
 
         # Latest gimbal attitude from the 0x04/0x05 heartbeat.
         self.attitude = None  # commands.GimbalAttitude | None
@@ -123,7 +165,11 @@ class Datalink:
             raise
 
     def close(self) -> None:
-        self._stop.set()
+        # Serialize shutdown with request admission/send. Once shutdown owns
+        # this lock, no later shutter or mode request may reach the socket.
+        with self._reply_lock:
+            self._stop.set()
+            self._cancel_requests()
         for t in self._threads:
             t.join(timeout=1.0)
         self._threads.clear()
@@ -155,6 +201,7 @@ class Datalink:
         # resetHandshakeSession. udp_seq starts at 0, NOT at base_seq: the
         # camera dictates the real command sequence base in its handshake
         # reply, and we adopt it below.
+        self._cancel_requests()
         self.last_rx_at = 0.0
         self.camera_feedback = CameraFeedback()
         self.session_id = _rand_between(0x1000, 0xFFFE)
@@ -225,8 +272,39 @@ class Datalink:
     # -- sending ------------------------------------------------------------
 
     def _next_duml_seq(self) -> int:
-        self.duml_seq = (self.duml_seq + 1) & 0xFFFF
-        return self.duml_seq
+        with self._seq_lock:
+            self.duml_seq = ((self.duml_seq + 1) & 0xFFFF) or 1
+            return self.duml_seq
+
+    def _cancel_requests(self):
+        with self._reply_lock:
+            for receipt in self._pending_replies.values():
+                receipt.error = 'camera session closed; command outcome unknown'
+                receipt.event.set()
+            self._pending_replies.clear()
+
+    def begin_request(self, frame):
+        """Arm before sending so even an immediate ACK cannot be missed.
+
+        Callers may hold their admission lock here, never while waiting.
+        There is deliberately no retransmission of a shutter or mode command.
+        """
+        with self._reply_lock:
+            if self._stop.is_set():
+                raise RuntimeError('camera session is closing')
+            if not self.healthy or self.sock is None:
+                raise RuntimeError('camera link is not healthy')
+            if len(self._pending_replies) >= 8:
+                raise RuntimeError('too many pending camera requests')
+            frame.seq = self._next_duml_seq()
+            if frame.seq in self._pending_replies:
+                raise RuntimeError('camera sequence collision')
+            receipt = CameraRequest(self, frame)
+            self._pending_replies[frame.seq] = receipt
+            if not self.send_frame(frame):
+                self._pending_replies.pop(frame.seq, None)
+                raise RuntimeError('camera command send failed')
+            return receipt
 
     def _send_raw(self, pkt_type: int, payload: bytes) -> None:
         if self.sock is None:
@@ -240,10 +318,10 @@ class Datalink:
                 return
             self.udp_seq = (self.udp_seq + 8) & 0xFFFF
 
-    def send_frame(self, frame: Frame) -> None:
+    def send_frame(self, frame: Frame) -> bool:
         """Wrap a DUML frame in a routing header and put it on the datalink."""
         if self.sock is None:
-            return
+            return False
         if frame.seq == 0:
             frame.seq = self._next_duml_seq()
         body = duml.encode(frame)
@@ -257,9 +335,10 @@ class Datalink:
                 self.sock.send(header + routing + body)
             except OSError as exc:
                 log.warning("udp send failed: %s", exc)
-                return
+                return False
             self.udp_seq = (self.udp_seq + 8) & 0xFFFF
         log.debug("UDP -> %s", frame)
+        return True
 
     def send_ack(self) -> None:
         """Window acknowledgement.
@@ -357,6 +436,15 @@ class Datalink:
                 self.ack_windows.acked_data = seq
 
     def _handle(self, frame: Frame) -> None:
+        with self._reply_lock:
+            receipt = self._pending_replies.get(frame.seq)
+            if receipt is not None:
+                request = receipt.request
+                if (frame.opcode == request.opcode and frame.sender == request.receiver and
+                        frame.receiver == request.sender and frame.flags & 0xC0 == 0xC0 and
+                        not receipt.event.is_set()):
+                    receipt.reply = frame
+                    receipt.event.set()
         self.camera_feedback.note(*frame.opcode, frame.payload)
         if frame.opcode == (0x04, 0x05):
             att = commands.parse_gimbal_attitude(frame.payload)

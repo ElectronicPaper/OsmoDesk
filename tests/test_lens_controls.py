@@ -7,11 +7,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "web" / "lens-controls.js"
+MOBILE_HTML = ROOT / "web" / "mobile.html"
 
 
 class LensControlsTests(unittest.TestCase):
+    def test_mobile_record_tally_wording_reflects_reported_state(self):
+        source = MOBILE_HTML.read_text(encoding="utf-8")
+        self.assertNotIn("does not report its tally", source)
+        self.assertNotIn("never reports its", source)
+        self.assertIn("fresh recording tally", source)
+        self.assertIn("REC REQUESTED", source)
+        self.assertIn("UNKNOWN", source)
+
     def test_module_has_no_storage_network_or_dynamic_html_path(self):
         source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("cannot read or restore the previous metering mode", source)
+        self.assertIn("Manual focus-distance control is not available", source)
         for forbidden in ("localStorage", "sessionStorage", "fetch(", "XMLHttpRequest", "eval("):
             self.assertNotIn(forbidden, source)
         self.assertEqual(source.count(".innerHTML ="), 1)
@@ -73,9 +84,9 @@ const api = window.OsmoLens.mount(host, {post: (path, body) => {
 const node = name => host.child.nodes[name];
 const flush = async () => { for(let i=0;i<6;i++) await Promise.resolve(); };
 const report = value => ({value, reported:true, age_s:0});
-const status = () => ({connected:true,link_healthy:true,workspace:{generation:'host1:1'},
-  move:{running:false},timelapse:{running:false}, camera_feedback:{
-    zoom:report(3),color:report('normal'),focus_mode:report('single'),focus_point:report({x:0.2,y:0.7})
+const status = () => ({connected:true,link_healthy:true,owner:'none',ssid:'OsmoPocket4P-TEST-CAMERA',workspace:{generation:'host1:1'},
+  move:{running:false},timelapse:{running:false},preroll:{until:0},recording:{on:false,requested:false}, camera_feedback:{
+    zoom:report(3),color:report('normal'),focus_mode:report('single'),focus_point:report({x:0.2,y:0.7}),capture_mode:report('video'),recording:report(false),playback:report(false)
   }});
 (async () => {
   assert.equal(calls.length,0);
@@ -83,6 +94,27 @@ const status = () => ({connected:true,link_healthy:true,workspace:{generation:'h
   api.update(status()); tick();
   assert.equal(calls.length,0);
   assert.match(node('mode').textContent,/AF-S/);
+  assert.match(node('capture-reported').textContent,/Video/);
+  assert.equal(node('video').attrs['aria-pressed'],'true');
+  node('photo').fire('click'); await flush();
+  assert.deepEqual(calls.pop(),{path:'/api/camera',body:{set:'capture_mode',value:'photo'}});
+  assert.equal(node('video').attrs['aria-pressed'],'true','request cannot rewrite camera-reported capture mode');
+  const photoStatus=status(); photoStatus.camera_feedback.capture_mode=report('photo'); api.update(photoStatus);
+  assert.equal(calls.length,0,'status rendering cannot change capture mode');
+  assert.equal(node('photo').attrs['aria-pressed'],'true');
+  for (const mutate of [s=>s.owner='program',s=>s.ssid='OsmoPocket3-TEST-CAMERA',s=>s.recording={on:true,requested:false},
+      s=>s.recording={on:false,requested:true},s=>s.camera_feedback.recording.value=true,s=>s.camera_feedback.recording.reported=false,
+      s=>s.camera_feedback.playback.value=true,s=>s.camera_feedback.playback.reported=false,s=>s.camera_request_busy=true,
+      s=>s.preroll.until=Date.now()/1000+10,s=>s.camera_feedback.capture_mode.age_s=3,s=>s.camera_feedback.capture_mode.reported=false]) {
+    const s=status(); mutate(s); api.update(s);
+    assert.equal(node('photo').disabled,true);
+    node('photo').fire('click'); await flush(); assert.equal(calls.length,0);
+  }
+  const busyStatus=status(); busyStatus.camera_request_busy=true; api.update(busyStatus);
+  assert.equal(node('single').disabled,true,'camera request blocks all lens controls');
+  const prerollStatus=status(); prerollStatus.preroll.until=Date.now()/1000+10; api.update(prerollStatus);
+  assert.equal(node('range').disabled,true,'active preroll blocks all lens controls');
+  api.update(status());
   node('range').value='4'; node('range').fire('input');
   api.update(status());
   assert.equal(node('range').value,'4');

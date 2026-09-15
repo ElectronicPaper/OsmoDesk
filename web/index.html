@@ -574,7 +574,7 @@
         <p class="note">These controls move the gimbal. Rehearsal does not replace the last full-shot take.</p>
       </details>
       <p class="note">Stop motion parks the gimbal. Use Stop recording separately, then log the take in Review.</p>
-      <details class="advanced"><summary>Run motion timelapse</summary><p class="note">Set timing in Compose first. Shoot-move-shoot stops for each capture; continuous follows one finite path. Progress counts requests, not verified files.</p><div class="row" id="lapseRunControls"></div></details>
+      <details class="advanced"><summary>Run motion timelapse</summary><p class="note">Choose Photo in Lens, then set timing in Compose. Shoot-move-shoot stops for each capture; continuous follows one finite path. Progress counts acknowledged shutters, not verified files.</p><div class="row" id="lapseRunControls"></div></details>
     </div>
     <!-- ============ left: link + live ============ -->
     <div class="col">
@@ -1424,24 +1424,26 @@ async function poll() {
     .toggle("low", !!(pw && pw.percent != null && pw.percent < 20));
   // Two record buttons and two zoom sliders now exist -- the card ones and the
   // full-screen ones. They must never disagree about what the camera is doing.
-  // Truthful telemetry: this camera never reports tally back, so "reported"
-  // stays false until the host itself claims otherwise. The label says
-  // "requested" or "verify camera" rather than implying a confirmed roll.
+  // Telemetry distinguishes a fresh confirmed tally (`reported`) from a request.
+  // The label stays requested or unconfirmed until fresh feedback confirms it.
   const rec = s.recording || {};
   recording = !!rec.on;
   recordingReported = !!rec.reported;
   if (recordingPending !== null && recording === recordingPending) recordingPending = null;
   const recDisplayOn = recordingPending !== null ? recordingPending : recording;
+  const waitingRecording = !!s.preroll?.waiting_recording;
   const recLabel = recordingPending !== null
     ? "Record requested…"
-    : (recording ? (recordingReported ? "■ Recording" : "Recording — verify camera")
-                 : "● Record");
+    : (waitingRecording ? "REC…"
+    : (recording ? (recordingReported ? "■ Recording" : "Recording unconfirmed")
+                 : "● Record"));
   $("btnRec").classList.toggle("armed", recDisplayOn);
   $("btnRec").textContent = recording ? "■ Stop recording" : recLabel;
   $("fsRec").classList.toggle("armed", recDisplayOn);
   $("fsRec").innerHTML = recLabel;
-  $("cRec").textContent = recordingPending !== null ? "request pending"
-    : (recording ? (recordingReported ? "REC reported" : "REC requested · verify camera") : "no REC request");
+  $("cRec").textContent = waitingRecording ? "Waiting for recording"
+    : recordingPending !== null ? "request pending"
+    : (recording ? (recordingReported ? "REC reported" : "REC requested · unconfirmed") : "no REC request");
   $("cRecWrap").classList.toggle("rec", recDisplayOn);
   $("cPitch").textContent = s.pitch == null ? "\u2014" : s.pitch.toFixed(1) + "\u00b0";
   $("cYaw").textContent = s.yaw == null ? "\u2014" : s.yaw.toFixed(1) + "\u00b0";
@@ -1603,10 +1605,12 @@ async function poll() {
       if(workspace==='director')window.director?.activate();
     }
     running = m.running;
+    const waitingRecording = !!s.preroll?.waiting_recording;
     const count = Math.max(0, Math.ceil((s.preroll?.until || 0) - Date.now()/1000));
     if (workspace === "shoot") $("nextAction").textContent = !connected
       ? "Camera disconnected. Open Rig to connect; Compose works offline."
-      : count ? `Recording requested · move begins in ${count}s · verify camera tally`
+      : waitingRecording ? "Waiting for recording confirmation. Motion remains reserved."
+      : count ? `Recording confirmed · move begins in ${count}s`
       : m.waiting_cue != null ? "Holding for your cue. Press GO when the action is ready."
       : running ? "Shot running. Stop motion parks the head; recording is a separate control."
       : m.fault ? m.fault
@@ -1690,9 +1694,8 @@ $("optLoop").onchange = e => { move.loop = e.target.checked; pushMove(); };
 $("optPing").onchange = e => { move.ping_pong = e.target.checked; pushMove(); };
 
 async function toggleRecord(on) {
-  // Optimistic only for the label: "requested", never "recording" — the
-  // camera never reports tally back, so the poll below is what actually
-  // confirms or reverts this.
+  // Optimistic only for the label: it remains a request. The poll supplies a
+  // fresh reported tally and confirms or reverts it.
   recordingPending = on;
   const r = await post("/api/action", { name: on ? "record_start" : "record_stop" });
   if (!r || r.ok === false) recordingPending = null;   // failed: leave prior state
@@ -1871,7 +1874,7 @@ function tlProgress(t) {
     $("lapseFill").style.width = (100 * t.frame / t.frames).toFixed(1) + "%";
   }
   if (t.running) {
-    $("tlSum").innerHTML = `capture requests <b>${t.frame}</b> of ` +
+    $("tlSum").innerHTML = `acknowledged shutters <b>${t.frame}</b> of ` +
                            `<b>${t.frames}</b>`;
   }
   // An error from a run that has already ended still has to be seen: the whole

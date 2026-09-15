@@ -7,7 +7,7 @@
 .ol-card p{margin:6px 0}
 .ol-card .ol-heading p,.ol-card .ol-muted{color:var(--ol-muted);font-size:12px}
 .ol-card .ol-gate{font-size:12px;padding:8px 10px;background:var(--bg,#141a25);border-radius:8px}
-.ol-card .ol-readings{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+.ol-card .ol-readings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0}
 .ol-card .ol-readings span,.ol-card .ol-readings strong{display:block}
 .ol-card .ol-readings span{font-size:12px;color:var(--ol-muted)}
 .ol-card .ol-readings strong{font-size:14px;font-variant-numeric:tabular-nums}
@@ -36,5 +36,6 @@
 .ol-card .ol-marks{display:grid;gap:12px}
 .ol-card .ol-marks span{display:block;font-size:12px;margin-bottom:4px;font-variant-numeric:tabular-nums}
 .ol-card .ol-request{border-top:1px solid var(--ol-line);padding-top:10px;font-size:12px;color:var(--ol-muted);margin-top:10px}
+@media(max-width:420px){.ol-card .ol-readings{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.ol-card *{scroll-behavior:auto}}
 @media(forced-colors:active){.ol-card button[aria-pressed=true]{outline:2px solid Highlight}.ol-card button:disabled{color:GrayText;opacity:1}}

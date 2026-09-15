@@ -26,7 +26,7 @@ class CameraCompletionTests(unittest.TestCase):
         self.s.armed, self.s.owner = True, 'program'
         self.s.link.camera_feedback = CameraFeedback()
         self.feedback = self.s.link.camera_feedback
-        self.feedback.note(2, 0x80, bytes(31))
+        self.feedback.note(2, 0x80, bytes(57) + b'\x17')
         self.feedback.note(0, 0x99, subscription('cam_lens_state', b'\xB2' + struct.pack('<ff', .5, .5) + bytes(5) + struct.pack('<H', 217)))
         self.feedback.note(0, 0x99, subscription('cam_image_effect', b'\0\0\x3f'))
         self.s.move = moves.Move(waypoints=[moves.Waypoint('a',0,0), moves.Waypoint('b',0,1,duration=1)])
@@ -111,6 +111,143 @@ class CameraCompletionTests(unittest.TestCase):
         plan=timelapse.plan_for(self.s.move,2)
         self.assertFalse(self.s._timelapse_capture(self.s.move,plan,1))
         self.assertEqual(self.s.link.frames,[])
+
+    def test_video_mode_never_reaches_shutter(self):
+        self.feedback.note(2, 0x80, bytes(57) + b'\x01')
+        with self.assertRaisesRegex(RuntimeError, 'Choose Photo'):
+            self.s.action('photo')
+        with self.assertRaisesRegex(RuntimeError, 'Choose Photo'):
+            self.s.timelapse_start(frames=3)
+        self.assertEqual(self.s.link.frames, [])
+        self.assertFalse(self.s.tl_state['running'])
+
+    def test_rejected_shutter_does_not_advance_or_persist(self):
+        def denied(**kw): raise RuntimeError('camera rejected command with 0xD9')
+        self.s.link.begin_request = lambda frame: SimpleNamespace(wait=denied)
+        self.s.tl_state.update(running=True, frame=0, frames=2)
+        with patch.object(timelapse, 'save_progress') as save:
+            with self.assertRaisesRegex(RuntimeError, '0xD9'):
+                self.s._timelapse_capture(self.s.move, timelapse.plan_for(self.s.move, 2), 1)
+            save.assert_not_called()
+        self.assertEqual(self.s.tl_state['frame'], 0)
+        self.assertFalse(self.s.camera_request_busy)
+
+    def test_stop_does_not_wait_for_ack_and_cannot_advance_count(self):
+        entered = threading.Event()
+        def delayed(**kw):
+            entered.set()
+            kw['cancel'].wait(1)
+        self.s.link.begin_request = lambda frame: SimpleNamespace(wait=delayed)
+        self.s.tl_state.update(running=True, frame=0, frames=2)
+        results = []
+        thread = threading.Thread(target=lambda:results.append(self.s._timelapse_capture(self.s.move, timelapse.plan_for(self.s.move, 2), 1)))
+        thread.start()
+        self.assertTrue(entered.wait(.5))
+        self.s.stop_everything()
+        thread.join(.5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results, [False])
+        self.assertEqual(self.s.tl_state['frame'], 0)
+
+    def test_mode_set_requires_ack_plus_new_mode_readback(self):
+        self.s.ssid = 'OsmoPocket4P-TEST'
+        self.s.owner = 'none'
+        self.feedback.note(2, 0x80, bytes(57) + b'\x01')
+        def accepted(frame):
+            self.s.link.frames.append(frame)
+            return SimpleNamespace(wait=lambda **kw:self.feedback.note(2, 0x80, bytes(57) + b'\x17'))
+        self.s.link.begin_request = accepted
+        self.s.camera_set('capture_mode', 'photo')
+        self.assertEqual(self.s.link.frames[-1].opcode, (2, 0xE1))
+        self.assertEqual(self.s.link.frames[-1].payload, b'\x17')
+        self.assertFalse(self.s.camera_request_busy)
+        self.assertNotIn('capture_mode', self.s.camera_state)
+        with self.assertRaisesRegex(RuntimeError, 'Choose Video'):
+            self.s.action('record_start')
+
+    def test_capture_mode_guards_bad_models_recording_playback_and_pending(self):
+        self.s.owner = 'none'
+        self.s.ssid = 'OsmoPocket3-TEST'
+        with self.assertRaisesRegex(RuntimeError, 'Pocket 4'):
+            self.s.camera_set('capture_mode', 'video')
+        self.s.ssid = 'OsmoPocket4P-TEST'
+        for raw in (b'\x80'+bytes(56)+b'\x17', bytes(3)+b'\x40'+bytes(53)+b'\x17'):
+            self.feedback.note(2, 0x80, raw)
+            with self.assertRaises(RuntimeError): self.s.camera_set('capture_mode', 'video')
+        self.feedback.note(2, 0x80, bytes(57)+b'\x17')
+        self.s.camera_request_busy = True
+        for action in (lambda:self.s.camera_set('capture_mode', 'video'), lambda:self.s.action('photo'),
+                       lambda:self.s.set_axes(.1, 0), lambda:self.s.play(), lambda:self.s.goto(0)):
+            with self.assertRaises(RuntimeError): action()
+        self.assertEqual(self.s.link.frames, [])
+
+    def test_resolution_change_cannot_overlap_capture_request(self):
+        self.s.camera_request_busy = True
+        with self.assertRaisesRegex(RuntimeError, 'current camera request'):
+            self.s.camera_resolution('4K', '25')
+        self.assertEqual(self.s.link.frames, [])
+        self.assertNotIn('resolution', self.s.camera_state)
+        self.assertNotIn('fps', self.s.camera_state)
+        self.s.camera_request_busy = False
+        self.s.camera_resolution('4K', '25')
+        self.assertEqual(len(self.s.link.frames), 1)
+
+    def test_pre_send_matching_mode_cannot_confirm_a_request(self):
+        self.s.owner, self.s.ssid = 'none', 'OsmoPocket4P-TEST'
+        self.feedback = self.s.link.camera_feedback = CameraFeedback(clock=lambda: 20)
+        self.feedback.note(2, 0x80, bytes(57)+b'\x01', now=19)
+        def during_send(frame):
+            self.feedback.note(2, 0x80, bytes(57)+b'\x17', now=19.5)
+            return SimpleNamespace(wait=lambda **kw: None)
+        self.s.link.begin_request = during_send
+        with patch.object(server.time, 'monotonic', side_effect=[20, 20, 20, 24]):
+            with self.assertRaisesRegex(TimeoutError, 'not confirmed'):
+                self.s.set_capture_mode('photo')
+        self.assertFalse(self.s.camera_request_busy)
+
+    def test_slow_profile_switch_gets_its_own_bounded_ack_window(self):
+        self.s.owner, self.s.ssid = 'none', 'OsmoPocket4P-TEST'
+        self.feedback.note(2, 0x80, bytes(57)+b'\x01')
+        requests = []
+        def begin(frame):
+            requests.append(frame)
+            def wait(timeout, cancel):
+                # Model a camera ACK arriving at 1.8 s, after the old budget.
+                if timeout < 1.8:
+                    raise TimeoutError('profile pipeline still changing')
+                self.assertLessEqual(timeout, 3.0)
+                self.feedback.note(2, 0x80, bytes(57)+b'\x17')
+            return SimpleNamespace(wait=wait)
+        self.s.link.begin_request = begin
+        self.s.set_capture_mode('photo')
+        self.assertEqual(len(requests), 1)
+        self.assertFalse(self.s.camera_request_busy)
+
+    def test_mode_switch_stop_cancels_wait_without_resending(self):
+        self.s.owner, self.s.ssid = 'none', 'OsmoPocket4P-TEST'
+        entered = threading.Event()
+        requests, errors = [], []
+        def begin(frame):
+            requests.append(frame)
+            def wait(timeout, cancel):
+                entered.set()
+                if not cancel.wait(.5):
+                    raise AssertionError('STOP failed to cancel mode wait')
+                raise RuntimeError('camera request cancelled')
+            return SimpleNamespace(wait=wait)
+        self.s.link.begin_request = begin
+        def change():
+            try: self.s.set_capture_mode('video')
+            except RuntimeError as exc: errors.append(str(exc))
+        worker = threading.Thread(target=change)
+        worker.start()
+        self.assertTrue(entered.wait(.5))
+        self.s.stop_everything()
+        worker.join(.5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, ['camera request cancelled'])
+        self.assertEqual(len(requests), 1)
+        self.assertFalse(self.s.camera_request_busy)
 
     def test_delayed_start_after_stop_cannot_restart_runner(self):
         starts=[]

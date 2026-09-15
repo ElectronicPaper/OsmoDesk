@@ -123,6 +123,9 @@ def _motion_change(method):
     @wraps(method)
     def changed(self, *args, **kwargs):
         with self._motion_lock:
+            if self.camera_request_busy and method.__name__ in (
+                    'play', 'roll', 'play_segment', 'goto', 'grab', 'timelapse_start', 'take_ownership'):
+                raise RuntimeError('wait for the camera request before moving')
             return method(self, *args, **kwargs)
     return changed
 
@@ -177,6 +180,8 @@ class CameraSession:
         self.pan_stability = "balanced"
         # What we have asked the camera for. Requests, not readings.
         self.camera_state: dict = {}
+        self.camera_request_busy = False
+        self._camera_cancel = threading.Event()
         # Shutter angle only means anything against a frame rate. Nothing on
         # this camera reports its frame rate back over any command implemented
         # here, so this is the rate the controller last set -- or the film
@@ -187,6 +192,8 @@ class CameraSession:
         # Pre-roll: seconds between "roll camera" and the move starting.
         self.preroll_s = 3.0
         self.preroll_until = 0.0
+        self.preroll_waiting_recording = False
+        self._roll_pending = None
         self._roll_timer: threading.Timer | None = None
         self.recording_since: float | None = None
         # Whether a hand rotation raises or lowers the frame is a
@@ -461,6 +468,7 @@ class CameraSession:
         # the status is cheaper than another endpoint and means the picker can
         # never be drawing last week's calibration.
         out["timelapse"] = dict(self.tl_state)
+        out["camera_request_busy"] = self.camera_request_busy
         out["start_check"] = self.start_check()
         out["travel"] = {
             "pitch": {"start": moves.PITCH_LIMITS.start,
@@ -486,7 +494,8 @@ class CameraSession:
         out["link_healthy"] = bool(self.link is not None and
                                    getattr(self.link, "healthy", True))
         out["preroll"] = {"seconds": self.preroll_s,
-                          "until": self.preroll_until}
+                          "until": self.preroll_until,
+                          "waiting_recording": self.preroll_waiting_recording}
         tally = feedback["recording"]
         out["recording"] = {"on": tally["value"] if tally["reported"] else self.recording,
                             "reported": tally["reported"], "requested": self.recording,
@@ -546,6 +555,8 @@ class CameraSession:
         half-automatic motion is how someone gets hit.
         """
         _, stick = self.require()
+        if self.camera_request_busy and (tilt or pan):
+            raise RuntimeError('wait for the camera request before moving')
         if not all(math.isfinite(v) and -1.0 <= v <= 1.0 for v in (tilt, pan)):
             raise ValueError("stick axes must be finite numbers in -1..1")
         if who not in ("phone", "core2"):
@@ -876,10 +887,9 @@ class CameraSession:
     def _set_recording(self, on: bool) -> None:
         """Note that a record command went out.
 
-        The record opcode is unverified on this camera and nothing reports the
-        tally back, so this is belief, not knowledge. It is published with
-        `reported: False` so a monitor can show the difference rather than
-        painting a confident red border over a camera that may not be rolling.
+        This is request tracking, not proof of recording. Status combines it
+        with independent fresh camera feedback; only that feedback may set
+        `reported: True`. Missing or stale telemetry stays unconfirmed.
         """
         self.recording = on
         self.recording_since = time.time() if on else None
@@ -1141,6 +1151,7 @@ class CameraSession:
         # must also stop it between frames, or the next hop fires a photo
         # from a rig nobody is watching.
         self._tl_stop.set()
+        self._camera_cancel.set()
         self._cancel_roll()
         if self.runner is not None and self.runner.running:
             self.runner.stop(aborted=True)
@@ -1184,6 +1195,8 @@ class CameraSession:
             raise ValueError("acknowledge that refocus also changes spot exposure metering")
         frames = camera.focus_target_burst(x, y)
         link, _ = self.require()
+        if self.camera_request_busy:
+            raise RuntimeError('wait for the current camera request')
         if not getattr(link, "healthy", False):
             raise RuntimeError("camera link is not healthy")
         if self.tl_state["running"] or self.preroll_until or self.runner and self.runner.running:
@@ -1192,9 +1205,16 @@ class CameraSession:
             link.send_frame(frame)
         self.camera_state["focus_target"] = {"x": x, "y": y}
 
-    @_motion_change
     def camera_set(self, what: str, value) -> None:
+        if what == 'capture_mode':
+            return self.set_capture_mode(value)
+        return self._camera_set(what, value)
+
+    @_motion_change
+    def _camera_set(self, what: str, value) -> None:
         link, _ = self.require()
+        if self.camera_request_busy:
+            raise RuntimeError('wait for the current camera request')
         if what in ("zoom", "focus_continuous", "color") and (
                 self.tl_state["running"] or self.preroll_until or self.runner and self.runner.running):
             raise RuntimeError("stop the program or countdown before changing lens settings")
@@ -1224,6 +1244,74 @@ class CameraSession:
         # told so via `reported: False`. A monitor that presents a requested
         # value as a measured one is how a shot gets exposed wrong.
         self.camera_state[what] = value
+
+    def _capture_ready(self, mode=None):
+        link, _ = self.require()
+        feedback = self._camera_feedback()
+        if not getattr(link, 'healthy', False):
+            raise RuntimeError('fresh camera link required')
+        if not feedback['recording']['reported'] or feedback['recording']['value'] or self.recording:
+            raise RuntimeError('camera must report standby; stop recording first')
+        if not feedback['playback']['reported'] or feedback['playback']['value']:
+            raise RuntimeError('camera must report capture standby, not playback')
+        if not feedback['capture_mode']['reported'] or feedback['capture_mode']['value'] not in ('photo', 'video'):
+            raise RuntimeError('fresh supported capture-mode readback required')
+        if mode is not None and feedback['capture_mode']['value'] != mode:
+            raise RuntimeError(f'Choose {mode.title()} in Lens > Capture mode first')
+        return link
+
+    def _begin_camera_request(self, frame):
+        # Caller holds the short admission/motion lock. Never wait under it.
+        if self.camera_request_busy:
+            raise RuntimeError('wait for the current camera request')
+        self._camera_cancel = threading.Event()
+        receipt = self.link.begin_request(frame)
+        self.camera_request_busy = True
+        return receipt, self._camera_cancel
+
+    def _finish_camera_request(self, cancel):
+        with self._motion_lock:
+            if self._camera_cancel is cancel:
+                self.camera_request_busy = False
+
+    def set_capture_mode(self, mode):
+        frame = camera.set_capture_mode(mode)
+        with self._motion_lock:
+            link = self._capture_ready()
+            if self.tl_state['running'] or self.preroll_until or self.owner != 'none' or self.runner and self.runner.running:
+                raise RuntimeError('stop motion and countdown before changing capture mode')
+            # Pocket 4-family encodings, not a universal DJI table.
+            if not re.match(r'^OsmoPocket4(?:P|Pro)?-', self.ssid or ''):
+                raise RuntimeError('capture-mode switching is verified only for the Pocket 4 family')
+            receipt, cancel = self._begin_camera_request(frame)
+            sent = time.monotonic()
+        try:
+            # A profile switch rebuilds the camera pipeline. Live Pocket 4P
+            # transitions took ~0.95 s; one timed out at the old 1.5 s limit.
+            # Keep this separate from shutter timing; never resend a SET.
+            receipt.wait(timeout=3.0, cancel=cancel)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if cancel.is_set() or self.link is not link or not link.healthy:
+                    raise RuntimeError('capture-mode request interrupted; inspect camera readback')
+                if link.camera_feedback.matches_since('capture_mode', mode, sent):
+                    return
+                cancel.wait(.02)
+            raise TimeoutError('capture mode was not confirmed; no photo sent')
+        finally:
+            self._finish_camera_request(cancel)
+
+    def capture_photo(self):
+        with self._motion_lock:
+            self._capture_ready('photo')
+            if self.tl_state['running'] or self.preroll_until or self.runner and self.runner.running:
+                raise RuntimeError('stop the program before a manual photo')
+            receipt, cancel = self._begin_camera_request(commands.photo())
+        try:
+            receipt.wait(timeout=1.5, cancel=cancel)
+            return {'acknowledged': True, 'file_verified': False}
+        finally:
+            self._finish_camera_request(cancel)
 
     # -- shutter angle ---------------------------------------------------------
 
@@ -1275,8 +1363,11 @@ class CameraSession:
         self.mains_hz = float(hz)
         return self.shutter_info()
 
+    @_motion_change
     def camera_resolution(self, resolution: str, fps: str) -> None:
         link, _ = self.require()
+        if self.camera_request_busy:
+            raise RuntimeError('wait for the current camera request')
         link.send_frame(camera.set_resolution(resolution, fps))
         self.camera_state["resolution"] = resolution
         self.camera_state["fps"] = fps
@@ -1641,6 +1732,7 @@ class CameraSession:
             raise RuntimeError("timelapse needs camera-reported standby; stop recording and wait for readback")
         if not self.armed:
             raise RuntimeError("disarmed mid-timelapse")
+        self._capture_ready('photo')
 
     def _timelapse_capture(self, shot, plan, frame):
         with self._motion_lock:
@@ -1649,8 +1741,18 @@ class CameraSession:
                 return False
             if self.owner != "program" or self.runner.fault or self.runner.report.aborted:
                 raise RuntimeError("motion ownership or tracking failed; no photo requested")
-            self.link.send_frame(commands.photo())
-            self.tl_state = dict(self.tl_state, frame=frame, phase="capture requested")
+            receipt, cancel = self._begin_camera_request(commands.photo())
+            self.tl_state = dict(self.tl_state, phase="awaiting camera acknowledgment")
+        try:
+            receipt.wait(timeout=min(1.5, plan.per_frame_s), cancel=cancel)
+        finally:
+            self._finish_camera_request(cancel)
+        with self._motion_lock:
+            if self._tl_stop.is_set() or cancel.is_set():
+                return False
+            self._timelapse_camera_ready()
+            self.tl_state = dict(self.tl_state, frame=frame, phase="shutter acknowledged",
+                                 capture_acknowledged=True, capture_reported=False)
         # Storage must never hold the motion lock: STOP still works on a slow disk.
         timelapse.save_progress(self.state_dir, shot, plan, frame, time.time())
         return True
@@ -2022,30 +2124,74 @@ class CameraSession:
     # Nothing moves until the timer fires, and any disarm cancels it.
     @_motion_change
     def roll(self, preroll_s: float | None = None, force: bool = False) -> dict:
+        if self.preroll_until or self.runner and self.runner.running:
+            raise RuntimeError("stop the current move or countdown before Roll")
+        if self.owner != 'none':
+            raise RuntimeError("release motion control before Roll")
         self._play_preflight(force)
+        self._capture_ready('video')
         seconds = float(self.preroll_s if preroll_s is None else preroll_s)
         if not (0.0 <= seconds <= 30.0):
             raise ValueError("preroll must be 0..30 seconds")
         self._cancel_roll()
+        sent = time.monotonic()
         self.action("record_start")
-        self.cue("count")
-        self.preroll_until = time.time() + seconds
-        timer = threading.Timer(seconds, self._roll_go)
+        # Starting a recording rebuilds the camera pipeline. A short countdown
+        # must not consume its start latency and move before any frames exist.
+        pending = {"link": self.link, "sent": sent, "deadline": sent + 5.0,
+                   "feedback": self.link.camera_feedback, "force": force,
+                   "seconds": seconds, "go_at": None}
+        self._roll_pending = pending
+        self.preroll_waiting_recording = True
+        self.preroll_until = time.time() + 5.0 + seconds
+        timer = threading.Timer(.1, self._roll_go, args=(pending,))
         timer.daemon = True
         self._roll_timer = timer
         timer.start()
-        return {"preroll": seconds, "at": self.preroll_until}
+        return {"preroll": seconds, "at": self.preroll_until,
+                "waiting_recording": True}
 
     @_motion_change
-    def _roll_go(self) -> None:
-        self._roll_timer = None
-        self.preroll_until = 0.0
-        # The world may have changed during the count: a STOP, a grab, a
-        # dropped link. Re-check rather than trust the timer.
-        if not self.armed or self.runner is None or self.clutch.state.engaged:
+    def _roll_go(self, pending) -> None:
+        # Timer.cancel cannot recall a callback already waiting for our lock.
+        # An exact transaction identity protects STOP and a later Roll.
+        if pending is not self._roll_pending:
             return
+        self._roll_timer = None
+        if (not self.armed or self.runner is None or self.clutch.state.engaged
+                or self.owner != 'none' or self.link is not pending['link']
+                or getattr(self.link, 'camera_feedback', None) is not pending['feedback']
+                or not getattr(self.link, 'healthy', False)):
+            self._cancel_roll()
+            return
+        now = time.monotonic()
+        feedback = getattr(self.link, 'camera_feedback', None)
+        reported = (feedback is not None and
+                    feedback.matches_since('recording', True, pending['sent']))
+        if pending['go_at'] is None:
+            if now >= pending['deadline']:
+                self.fault = 'Recording not confirmed; no motion started. Check camera; stop recording separately.'
+                self._cancel_roll()
+                return
+            if reported:
+                pending['go_at'] = now + pending['seconds']
+                self.preroll_waiting_recording = False
+                self.preroll_until = time.time() + pending['seconds']
+                self.cue('count')
+        elif not reported:
+            self.fault = 'Recording confirmation lost during pre-roll; no motion started.'
+            self._cancel_roll()
+            return
+        if pending['go_at'] is None or now < pending['go_at']:
+            target = pending['deadline'] if pending['go_at'] is None else pending['go_at']
+            timer = threading.Timer(min(.1, max(0, target - now)), self._roll_go, args=(pending,))
+            timer.daemon = True
+            self._roll_timer = timer
+            timer.start()
+            return
+        self._cancel_roll()
         try:
-            self._play_preflight()
+            self._play_preflight(pending['force'])
         except (RuntimeError, ValueError) as exc:
             self.fault = str(exc)
             return
@@ -2057,6 +2203,8 @@ class CameraSession:
         if timer is not None:
             timer.cancel()
         self._roll_timer = None
+        self._roll_pending = None
+        self.preroll_waiting_recording = False
         self.preroll_until = 0.0
 
     @_motion_change
@@ -2115,7 +2263,9 @@ class CameraSession:
                 "tilt_error": round(dp, 2), "pan_error": round(dy, 2),
                 "tolerance": moves.START_TOLERANCE_DEG}
 
+    @_motion_change
     def stop_move(self) -> None:
+        self._cancel_roll()
         if self.runner is not None:
             self.runner.stop(aborted=True)
 
@@ -2141,9 +2291,16 @@ class CameraSession:
         ])
         self.runner.start(hop)
 
-    @_motion_change
     def action(self, name: str) -> None:
+        if name == 'photo':
+            return self.capture_photo()
+        return self._action(name)
+
+    @_motion_change
+    def _action(self, name: str) -> None:
         link, stick = self.require()
+        if self.camera_request_busy and name not in ('record_stop', 'live_view', 'params'):
+            raise RuntimeError('wait for the current camera request')
         if self.tl_state["running"] and name not in ("record_stop", "live_view", "params"):
             raise RuntimeError("stop the timelapse before another camera action")
         if name == "recenter":
@@ -2155,13 +2312,15 @@ class CameraSession:
         elif name == "fpv":
             stick.fpv_mode()
         elif name == "record_start":
+            mode = self._camera_feedback()['capture_mode']
+            if mode['reported'] and mode['value'] == 'photo':
+                raise RuntimeError('Choose Video in Lens > Capture mode before recording')
             link.send_frame(commands.record(True))
             self._set_recording(True)
         elif name == "record_stop":
+            self._cancel_roll()
             link.send_frame(commands.record(False))
             self._set_recording(False)
-        elif name == "photo":
-            link.send_frame(commands.photo())
         elif name == "live_view":
             link.send_frame(commands.live_view_enable())
         elif name == "params":
@@ -2797,8 +2956,8 @@ class Handler(BaseHTTPRequestHandler):
                                   float(body.get("duration", 2.5)))
                 self._json({"ok": True})
             elif self.route == "/api/action":
-                self.session.action(str(self._body().get("name", "")))
-                self._json({"ok": True})
+                result = self.session.action(str(self._body().get("name", "")))
+                self._json({"ok": True, **(result or {})})
             else:
                 self.send_error(404)
         except Exception as exc:

@@ -132,8 +132,8 @@ grid geometry fixed that shared cause without masking overflow or removing featu
 The later live check established BLE pairing, Wi-Fi association, fresh telemetry,
 720p preview at approximately 30 fps with 5,349 decoded frames and no decode errors,
 and a bounded 0.6-degree pan followed by a stable stop. The operator confirmed
-the three-second recording started and stopped. This does not establish a
-camera-reported recording tally or broad physical smoothness/repeatability.
+the three-second recording started and stopped. That earlier observation alone
+did not establish a camera-reported tally or broad physical smoothness/repeatability.
 
 Native Windows Credential Manager save/reload, rotation, removal and missing-key
 behavior passed with disposable synthetic values; the owned entry was removed.
@@ -172,6 +172,35 @@ continuous request sequence finished with 0.23-degree peak error and no gaps.
 This does not verify saved still files, optical focus accuracy, manual focus
 distance, long-duration filming, or compatibility with another camera model.
 Refocus A/B was tested offline only because it also changes spot exposure metering.
+
+The subsequent [camera reliability update](../RELEASE_NOTES.md) adds independent
+saved-file proof (four initial photos, then a 20-frame/60-second continuous run),
+three repeated takes, disconnect/no-auto-resume checks, and the corrected
+recording-confirmation-before-pre-roll contract. It also records the complete
+12-combination live AI integration matrix and final 1,340-test software gate.
+These later bounded results supersede the saved-file/recording limitations of
+the earlier observation; optical focus accuracy and universal reliability are
+still not established.
+
+## Focus capability boundary — 2026-09-15
+
+DJI documents AF-S and AF-C (including its autofocus tracking variants) for the
+Pocket 4P, not a manual focus-distance interface. The confirmed OpenPocketCine
+command set at `9b30b93572797c94db5ad9236fb746410f8d761f` exposes autofocus mode
+and screen-region targets, but no calibrated lens-position SET/GET. This is an
+evidence gap, not proof that an undiscovered firmware command is impossible.
+
+The documented Mimo-equivalent focus burst explicitly selects spot AE metering
+and sets both focus and metering regions. No confirmed previous-metering GET or
+restoration SET is available. Therefore OsmoDesk does not probe new lens opcodes,
+promise automatic metering restoration, or label autofocus A/B as rack-focus.
+The Lens disclosure now says metering must be reviewed/restored on-camera or in
+Mimo. Optical A/B acceptance requires an operator-observed test with that recovery
+path; it remains unverified, rather than being inferred from acknowledgments.
+
+Sources: [DJI Pocket 4P specifications](https://store.dji.com/uk/product/osmo-pocket-4p),
+[DJI focus-mode help](https://repair.dji.com/help/content?customId=01700009262&lang=en&paperDocType=ARTICLE&re=US&spaceId=17),
+[confirmed focus burst and autofocus commands](https://github.com/erik-sutton95/OpenPocketCine/blob/9b30b93572797c94db5ad9236fb746410f8d761f/Sources/OpenPocketViewCore/Commands.swift#L270-L313).
 
 ## Sources
 

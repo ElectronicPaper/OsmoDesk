@@ -26,6 +26,25 @@ class CameraFeedbackTests(unittest.TestCase):
         self.feedback.note(2, 0x80, p)
         self.assertIs(self.feedback.snapshot()['recording']['value'], False)
 
+    def test_capture_mode_needs_its_own_fresh_byte_and_post_request_observation(self):
+        p = bytearray(58); p[57] = 0x17
+        self.feedback.note(2, 0x80, p)
+        self.assertEqual(self.feedback.snapshot()['capture_mode']['value'], 'photo')
+        self.assertFalse(self.feedback.matches_since('capture_mode', 'photo', 10.1))
+        self.now = 12
+        self.feedback.note(2, 0x80, bytes(31))
+        self.now = 13
+        self.assertFalse(self.feedback.snapshot()['capture_mode']['reported'])
+        p[57] = 1
+        self.feedback.note(2, 0x80, p)
+        self.assertTrue(self.feedback.matches_since('capture_mode', 'video', 12))
+        p[57] = 5
+        self.feedback.note(2, 0x80, p)
+        self.assertIsNone(self.feedback.snapshot()['capture_mode']['value'])
+        p[3] = 0x40
+        self.feedback.note(2, 0x80, p)
+        self.assertTrue(self.feedback.snapshot()['playback']['value'])
+
     def test_all_documented_focus_bytes(self):
         for mode, expected in ((1, 'single'), (0xB1, 'single'), (2, 'continuous'), (0xB2, 'continuous')):
             p = bytes([mode]) + struct.pack('<ff', .25, .75) + bytes(5) + struct.pack('<H', 651)

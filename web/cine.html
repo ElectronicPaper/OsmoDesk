@@ -102,11 +102,10 @@ body.sun{ --pill:rgba(10,12,14,.93); --ink:#fff; --edge:rgba(255,255,255,.22); }
    because a thick one colour-biases the edge you are judging. */
 #tally{position:absolute; inset:0; pointer-events:none; border:0 solid var(--rec);
        transition:border-width .12s;}
-/* Amber and dashed while the recording state is only this controller's
-   belief. The record opcode is unverified on this camera and nothing
-   reports the tally back, so a confident red border would be a claim we
-   cannot support -- and a false tally is the most expensive lie a monitor
-   can tell. Solid red is reserved for a state the camera confirms. */
+/* Amber and dashed while recording is requested but unconfirmed, or when
+   feedback is stale or lost. A false tally is the most expensive lie a
+   monitor can tell. Solid red is reserved for a fresh tally the camera
+   reports. */
 body.rec #tally{ border-width:3px; border-style:dashed; border-color:var(--warn); }
 body.rec.confirmed #tally{ border-style:solid; border-color:var(--rec); }
 
@@ -408,7 +407,7 @@ a.back{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);z-index:
   </div>
   <div id="tally"></div>
   <div id="punch" class="pill">PUNCH 2&times;</div>
-  <div id="preroll" class="pill"><span class="k">PRE-ROLL</span><span class="v" id="prerollN">0</span></div>
+  <div id="preroll" class="pill"><span class="k" id="prerollK">PRE-ROLL</span><span class="v" id="prerollN">0</span></div>
 
   <div id="hud" class="pill">
     <div class="seg"><i class="recdot"></i><span id="recWord">STBY</span></div>
@@ -956,7 +955,8 @@ function tlBand(t) {
     return;
   }
   band.classList.add("on");
-  $("tlbCount").textContent = `${t.frame}/${t.frames}`;
+  $("tlbCount").textContent = `${t.frame}/${t.frames} ACK`;
+  $("tlbCount").title = 'Acknowledged shutter commands, not verified image files';
   $("tlbFill").style.width = t.frames
     ? (100 * t.frame / t.frames).toFixed(1) + "%" : "0%";
 
@@ -1032,23 +1032,26 @@ async function poll() {
   if (connected && !feed.src) feed.src = "/api/stream";
 
   const R = s.recording || {};
+  const waitingRecording = !!s.preroll?.waiting_recording;
   recording = !!R.on;
   document.body.classList.toggle("rec", recording);
-  // The record opcode is unverified and nothing reports the tally back, so
-  // the word on screen says what actually happened: a request was sent, not
-  // that the camera is rolling.
+  // A request is not proof that the camera is rolling. The word stays
+  // requested until fresh reported feedback confirms the tally.
   document.body.classList.toggle("confirmed", !!R.reported);
-  $("recWord").textContent = !recording ? "STBY"
+  $("recWord").textContent = waitingRecording ? "REC…" : !recording ? "STBY"
     : (R.reported ? "REC" : "REC REQUESTED");
-  $("recWord").title = recording && !R.reported
-    ? "request sent -- verify camera, this app cannot confirm recording" : "";
+  $("recWord").title = waitingRecording ? "Waiting for recording confirmation"
+    : recording && !R.reported
+    ? "request sent — waiting for fresh camera feedback" : "";
   if (recording && recStartedAt == null) recStartedAt = performance.now();
   if (!recording) recStartedAt = null;
 
   const pr = s.preroll || {};
   const counting = pr.until && pr.until > Date.now() / 1000;
-  $("preroll").classList.toggle("on", !!counting);
-  if (counting) $("prerollN").textContent = Math.max(0, Math.ceil(pr.until - Date.now() / 1000));
+  $("preroll").classList.toggle("on", !!waitingRecording || !!counting);
+  $("prerollK").textContent = waitingRecording ? "WAITING FOR RECORDING" : "RECORDING CONFIRMED";
+  $("prerollN").textContent = waitingRecording ? "…"
+    : Math.max(0, Math.ceil(pr.until - Date.now() / 1000));
 
   // One glyph, not a developer's frame counter. Detail lives behind a click.
   const fps = (s.live && s.live.fps) || 0;

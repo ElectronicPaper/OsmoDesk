@@ -1,4 +1,4 @@
-# Camera completion update — working candidate
+# Camera reliability update — 2026-09-15
 
 Fresh camera-reported recording, autofocus, AF target, zoom and color are separate
 from setter requests. All operator views have a shared Lens panel with accessible
@@ -9,9 +9,63 @@ Waypoint zoom now executes in the canonical runner at no more than 20 Hz, using
 the corrected four-byte SET format (status offset 14 is not a SET offset).
 Continuous timelapse executes a finite retimed path, aborting on missed deadlines,
 STOP, tracking failure, lost standby readback or recovery-write failure. Capture
-counts are requests, not confirmed files; interrupted continuous time cannot be resumed.
+counts are acknowledged shutters, not confirmed files; interrupted continuous time cannot be resumed.
 
-The dated preview notes below describe the earlier shipped release.
+Photo and Video now have explicit controls in Lens. Switching requires a supported
+Pocket 4-family identity, standby, an accepted command and fresh post-command mode
+readback. A rejected, cancelled or timed-out shutter never advances timelapse
+progress, and no shutter is retried automatically. STOP stays responsive while
+waiting for the camera. Review exposure and framing after a mode switch: camera
+profiles may retain different settings.
+
+On 2026-09-15, the development Pocket 4P saved one stationary photo and all three
+frames of a nine-second continuous timelapse. The four new SD-card originals were
+independently downloaded and decoded at 3840×2160; this proves those files, not
+unlimited timelapse reliability or optical sharpness. Telemetry stayed healthy
+through 35 samples, with at most 0.6° pan and 0.2° tilt from the starting pose.
+The original draft and Video mode were restored, with motion stopped/disarmed.
+
+Mode switches now have a separate three-second acknowledgment window; shutter
+timing remains separately bounded. Twelve successive real Photo/Video switches
+with preview passed after one earlier transition timed out despite changing mode.
+No acknowledgment-format defect was established and no automatic retry was added.
+
+A later 60-second continuous timelapse saved all 20 originals. Every file was
+downloaded and decoded at 3840×2160. The canonical runner recorded 1,943 samples,
+zero telemetry gaps and 0.2° peak tracking error. Three short repeated moves also
+completed, with fresh recording start/stop tally and readable saved MP4s. Those
+clips exposed a real short-pre-roll issue: motion could start before recording.
+
+Roll now requires freshly reported Video standby, waits up to five seconds for
+recording confirmation, then starts the full chosen pre-roll. It rechecks tally,
+link, ownership and start position before motion. STOP, Stop move, Stop recording,
+disarm and replaced connection state cancel the pending start; old timer callbacks
+cannot start a new transaction. Timeouts never retry recording automatically.
+In the corrected physical test, tally arrived at 1.17 s, motion began at 1.75 s,
+and the six-second path completed with zero gaps. Its saved 4K/59.94 fps clip is
+6.273 seconds; container, first frame and final GOP decoded successfully (not
+an exhaustive decode or frame-to-telemetry alignment). Stop move also cancelled a
+confirmed countdown without implicitly stopping recording. Mid-timelapse disconnect
+left the host stopped/disarmed; reconnect did not resume motion or recording.
+
+All 12 live model/effort combinations (Luna, Terra, Sol, Astra × low/medium/high)
+returned the requested model. Of 24 synthetic treatments, 23 passed local
+preflight and one was blocked. No treatment was applied. The temporarily approved
+$2 verification ceiling was restored to $1; no footage or real shot data was sent.
+
+Final software checks: 1,340 tests passed; real Chrome workspace interaction and
+15 responsive layout checks passed. Lens and recording-wait layouts passed at
+320/390/768/1440 pixels on desktop, mobile and cinema views, with 44-pixel Lens
+controls and no JavaScript errors. These are bounded checks, not certification.
+
+Manual focus-distance/rack-focus remains unsupported by the confirmed protocol.
+Refocus A/B also changes spot exposure metering; OsmoDesk cannot read or restore
+the previous metering mode. The UI now explicitly directs the operator to review
+and restore metering on-camera or in Mimo. Its optical result remains unverified.
+
+The dated preview notes below describe the earlier shipped release. Its tally,
+waypoint-zoom and continuous-execution limitations are superseded by this update;
+other camera models, long-term reliability and optical calibration remain unproven.
 
 # Cinema Workspace preview — v0.2.0-preview.1
 

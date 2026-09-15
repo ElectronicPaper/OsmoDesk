@@ -79,12 +79,22 @@ silently replayed. This remains a trusted-LAN tool, not an internet-facing multi
 Take evidence is attached to the full shot version that actually ran. Returning to P1 or
 rehearsing a segment does not replace that evidence. Manual log entries carry no motion proof.
 Recording commands remain requests; fresh camera telemetry is shown separately as reported tally.
+Roll waits up to five seconds for fresh recording confirmation before starting the
+full pre-roll countdown. Missing or lost confirmation prevents motion. STOP and
+Stop recording cancel the pending start. Timed-out recording requests are never retried automatically.
 Waypoint zoom executes through the motion runner with readback/color guards (no D-Log2 zoom).
 Continuous timelapse executes one finite, cue-free path; missed deadlines stop it without
-catch-up bursts. Progress counts capture requests, not verified image files. Interrupted
+catch-up bursts. Choose **Lens → Capture mode → Photo** before stills or either timelapse
+workflow; choose **Video** again before recording. Switching is explicit, restricted to
+Pocket 4-family identities, and requires camera acknowledgment plus fresh mode readback.
+Profiles can retain different camera settings: inspect exposure/framing after switching.
+Rejected, cancelled or timed-out shutters stop the sequence without advancing its count;
+there is no automatic shutter retry. Progress counts acknowledged shutters, not verified image files. Interrupted
 continuous sequences must restart; shoot-move-shoot retains explicit recovery.
 The **Lens** button on every operator view opens autofocus, zoom and session-only Refocus A/B.
 Refocus targets also change spot exposure metering and require explicit acknowledgement.
+The previous metering mode cannot be read or restored by OsmoDesk; review and
+restore it on the camera or in DJI Mimo. Refocus A/B is not a reversible focus-only command.
 Manual lens-distance/rack-focus control remains unavailable; autofocus targets are not a substitute.
 Take comparisons report overlap, coverage, gaps and aborted context. Pixel figures are
 angular estimates, not evidence that footage can be composited or that the rig has not moved.
@@ -189,9 +199,10 @@ or sibling checkout is required. See [layout licenses](web/vendor/THIRD-PARTY-NO
   [PyAV's release requirements](https://pypi.org/project/av/18.1.0/) explain platform wheels.
   Codec availability is not proof of camera stream compatibility.
 
-The API model catalogue was checked for all four models. Live generation has been
-verified with Luna/low on a synthetic shot; other model/effort combinations and
-physical camera operation are not established by that check. See the
+Live synthetic requests passed for Luna, Terra, Sol and Astra at low, medium and
+high effort on 2026-09-15. All 12 returned the requested model; 23 of 24 treatments
+passed local preflight and one was blocked. This proves the integration, not
+cinematic quality or physical camera operation. See the
 [AI audit and research](docs/AI-SHOT-COPILOT.md) for scope and evidence.
 
 ## Verify

@@ -140,6 +140,16 @@ def set_zoom(factor: float, seq: int = 0) -> Frame:
     return set_zoom_lens(round(lens), seq)
 
 
+def set_capture_mode(mode: str, seq: int = 0) -> Frame:
+    """Pocket 4/4 Pro shooting mode, not exposure mode (OpenPocketCine E1).
+
+    Explicit table only: 17 Photo, 01 Video. Other models/profiles are unproven.
+    """
+    if mode not in ('photo', 'video'):
+        raise ValueError('capture mode must be photo or video')
+    return _cam(0xE1, bytes([0x17 if mode == 'photo' else 0x01]), seq)
+
+
 def set_focus_mode(continuous: bool, seq: int = 0) -> Frame:
     """0x02/0x24 -- `01` single (AF-S), `02` continuous (AF-C)."""
     return _cam(0x24, bytes([0x02 if continuous else 0x01]), seq)

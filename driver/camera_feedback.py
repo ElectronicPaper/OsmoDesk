@@ -13,7 +13,7 @@ import struct
 import threading
 import time
 
-FIELDS = ('recording', 'record_seconds', 'focus_mode', 'focus_point', 'zoom', 'color')
+FIELDS = ('recording', 'record_seconds', 'focus_mode', 'focus_point', 'zoom', 'color', 'capture_mode', 'playback')
 COLORS = {0x3F: 'normal', 0x3C: 'hdr', 0x17: 'd-log', 0x41: 'd-log2'}
 
 
@@ -51,8 +51,12 @@ class CameraFeedback:
         values = {}
         if (cmd_set, cmd_id) == (2, 0x80) and len(payload) >= 13:
             values['recording'] = bool(payload[0] & 0x80)
+            values['playback'] = bool(struct.unpack_from('<I', payload, 0)[0] & (1 << 30))
             if len(payload) >= 31:
                 values['record_seconds'] = struct.unpack_from('<H', payload, 29)[0]
+            if len(payload) >= 58:
+                # Unknown modes explicitly invalidate the previous supported mode.
+                values['capture_mode'] = {0x01: 'video', 0x17: 'photo'}.get(payload[57])
         elif (cmd_set, cmd_id) == (0, 0x99):
             parsed = parse_subscribe(payload)
             if parsed is None:
@@ -82,6 +86,13 @@ class CameraFeedback:
                     self._state[key] = (value, now)
                     accepted = True
         return accepted
+
+    def matches_since(self, name, value, since) -> bool:
+        """A fresh observation after a SET, never the pre-request cache."""
+        with self._lock:
+            observed, stamp = self._state.get(name, (None, None))
+            return (stamp is not None and stamp >= since and observed == value and
+                    self.snapshot()[name]['reported'])
 
     def snapshot(self, now=None) -> dict:
         now = self.clock() if now is None else now

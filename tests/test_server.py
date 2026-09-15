@@ -12,6 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import server
 from driver import core2, library, lut, moves, response
@@ -54,6 +55,10 @@ class FakeLink:
 
     def send_frame(self, frame):
         self.frames.append(frame)
+
+    def begin_request(self, frame):
+        self.send_frame(frame)
+        return SimpleNamespace(wait=lambda **kw: duml.Frame(1, 2, frame.seq, 0xC0, frame.cmd_set, frame.cmd_id, b'\0'))
 
     def close(self):
         self.closed = True
@@ -392,6 +397,11 @@ class TestActionDispatch(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 self.s.link.frames.clear()
+                if name == 'photo':
+                    from driver.camera_feedback import CameraFeedback
+                    self.s.link.healthy = True
+                    self.s.link.camera_feedback = CameraFeedback()
+                    self.s.link.camera_feedback.note(2, 0x80, bytes(57) + b'\x17')
                 self.s.action(name)
                 self.assertEqual(len(self.s.link.frames), 1)
                 frame = self.s.link.frames[0]
@@ -413,6 +423,14 @@ class TestActionDispatch(unittest.TestCase):
         html = (Path(server.__file__).parent / "web" / "index.html").read_text("utf-8")
         for name in sorted(set(re.findall(r'data-action="([^"]+)"', html))):
             with self.subTest(action=name):
+                if name == 'photo':
+                    from driver.camera_feedback import CameraFeedback
+                    self.s.link.healthy = True
+                    self.s.recording = False
+                    self.s.link.camera_feedback = CameraFeedback()
+                    self.s.link.camera_feedback.note(2, 0x80, bytes(57) + b'\x17')
+                elif name == 'record_start' and hasattr(self.s.link, 'camera_feedback'):
+                    self.s.link.camera_feedback.note(2, 0x80, bytes(57) + b'\x01')
                 self.s.action(name)  # must not raise
 
 
@@ -1712,17 +1730,22 @@ class TestPathExportApi(unittest.TestCase):
 
 
 class TestRollAndLinkHealth(unittest.TestCase):
-    """ROLL is record, count, then the move; a disarm cancels the count."""
+    """ROLL waits for a fresh tally, then counts; cancellation wins every race."""
 
     def _ready(self):
         from driver import limits
         s = server.CameraSession(make_args())
         s.link, s.stick, s.state = FakeLink(), FakeStick(), "connected"
+        s.link.healthy = True
         s.started = []
         s.runner = fake_runner(start=lambda m: s.started.append(m))
         s.armed = True
         s.actions = []
-        s.action = lambda name: s.actions.append(name)
+        action = s.action
+        def noted_action(name):
+            s.actions.append(name)
+            return action(name)
+        s.action = noted_action
         s.cues = []
         s.cue = lambda name: s.cues.append(name)
         p = moves.wrap180(limits.PITCH_ARC.low + limits.PITCH_ARC.usable * .5)
@@ -1734,24 +1757,223 @@ class TestRollAndLinkHealth(unittest.TestCase):
             quaternion=(0.0, 1.0, 0.0, 0.0))
         return s
 
-    def test_roll_records_counts_then_starts_after_the_preroll(self):
+    def _feedback(self, s, clock, stale_after=3.0, recording=False, stamp=None):
+        from driver.camera_feedback import CameraFeedback
+        s.link.camera_feedback = CameraFeedback(clock=lambda: clock[0], stale_after=stale_after)
+        payload = bytearray(58)
+        payload[0] = 0x80 if recording else 0
+        payload[57] = 0x01
+        s.link.camera_feedback.note(2, 0x80, bytes(payload), now=clock[0] if stamp is None else stamp)
+
+    def _tally(self, s, on, now):
+        payload = bytearray(58)
+        payload[0] = 0x80 if on else 0
+        s.link.camera_feedback.note(2, 0x80, bytes(payload), now=now)
+
+    def test_roll_waits_for_delayed_ack_then_runs_the_full_preroll(self):
+        clock, timers = [100.0], []
+        class Timer:
+            def __init__(self, _delay, callback, args=()):
+                self.callback, self.args, self.cancelled = callback, args, False
+            def start(self): timers.append(self)
+            def cancel(self): self.cancelled = True
         s = self._ready()
-        out = s.roll(preroll_s=0.05)
-        self.assertEqual(out["preroll"], 0.05)
+        self._feedback(s, clock)
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+            out = s.roll(preroll_s=0.5)
+            pending = s._roll_pending
+            self.assertTrue(out["waiting_recording"])
+            self.assertTrue(s.status()["preroll"]["waiting_recording"])
+            s._roll_go(pending)
+            self.assertEqual(s.started, [])
+            clock[0] = 101.0; self._tally(s, True, clock[0])
+            s._roll_go(pending)
+            self.assertEqual(s.cues, ["count"])
+            self.assertFalse(s.preroll_waiting_recording)
+            clock[0] = 101.49; s._roll_go(pending)
+            self.assertEqual(s.started, [])
+            clock[0] = 101.5; s._roll_go(pending)
         self.assertEqual(s.actions, ["record_start"])
-        self.assertEqual(s.cues, ["count"])
-        self.assertEqual(s.started, [])           # nothing moves during the count
-        time.sleep(0.2)
         self.assertEqual(len(s.started), 1)
         self.assertEqual(s.owner, "program")
 
-    def test_a_disarm_during_the_count_cancels_the_move(self):
+    def test_zero_preroll_still_waits_for_a_fresh_tally(self):
+        clock, timers = [200.0], []
+        class Timer:
+            def __init__(self, _delay, callback, args=()): self.callback, self.args = callback, args
+            def start(self): timers.append(self)
+            def cancel(self): pass
         s = self._ready()
-        s.roll(preroll_s=0.1)
-        s.disarm("grab")
-        time.sleep(0.25)
+        self._feedback(s, clock)
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+            s.roll(preroll_s=0)
+            pending = s._roll_pending
+            s._roll_go(pending)
+            self.assertEqual(s.started, [])
+            clock[0] = 201.0; self._tally(s, True, clock[0])
+            s._roll_go(pending)
+        self.assertEqual(len(s.started), 1)
+
+    def test_timeout_leaves_recording_requested_but_never_starts_motion(self):
+        clock, timers = [300.0], []
+        class Timer:
+            def __init__(self, _delay, callback, args=()): self.callback, self.args = callback, args
+            def start(self): timers.append(self)
+            def cancel(self): pass
+        s = self._ready()
+        self._feedback(s, clock)
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+            s.roll(preroll_s=0)
+            pending = s._roll_pending
+            clock[0] = 305.0; s._roll_go(pending)
         self.assertEqual(s.started, [])
+        self.assertTrue(s.recording)
+        self.assertIn("Recording not confirmed", s.fault)
+
+    def test_pre_request_tally_and_lost_tally_do_not_start_motion(self):
+        clock, timers = [400.0], []
+        class Timer:
+            def __init__(self, _delay, callback, args=()): self.callback, self.args = callback, args
+            def start(self): timers.append(self)
+            def cancel(self): pass
+        s = self._ready()
+        self._feedback(s, clock, recording=True, stamp=399.0)
+        s._capture_ready = lambda _mode: None
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+            s.roll(preroll_s=1)
+            pending = s._roll_pending
+            s._roll_go(pending)
+            self.assertEqual(s.started, [])
+            clock[0] = 401.0; self._tally(s, True, clock[0]); s._roll_go(pending)
+            self._tally(s, False, 401.1); clock[0] = 401.1; s._roll_go(pending)
+        self.assertEqual(s.started, [])
+        self.assertIn("confirmation lost", s.fault)
+
+    def test_record_stop_cancels_and_an_old_token_cannot_start_a_new_roll(self):
+        clock, timers = [500.0], []
+        class Timer:
+            def __init__(self, _delay, callback, args=()): self.callback, self.args, self.cancelled = callback, args, False
+            def start(self): timers.append(self)
+            def cancel(self): self.cancelled = True
+        s = self._ready()
+        self._feedback(s, clock)
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+            s.roll(preroll_s=0)
+            old = s._roll_pending
+            s.action("record_stop")
+            self.assertIsNone(s._roll_pending)
+            s.roll(preroll_s=0)
+            current = s._roll_pending
+            s._roll_go(old)
+            self.assertEqual(s.started, [])
+            clock[0] = 501.0; self._tally(s, True, clock[0]); s._roll_go(current)
+        self.assertEqual(len(s.started), 1)
+
+    def test_foreign_link_cancels_the_pending_roll(self):
+        clock, timers = [600.0], []
+        class Timer:
+            def __init__(self, _delay, callback, args=()): self.callback, self.args = callback, args
+            def start(self): timers.append(self)
+            def cancel(self): pass
+        s = self._ready()
+        self._feedback(s, clock)
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+            s.roll(preroll_s=0)
+            pending = s._roll_pending
+            s.link = FakeLink(); s.link.healthy = True
+            s._roll_go(pending)
+        self.assertEqual(s.started, [])
+        self.assertIsNone(s._roll_pending)
+
+    def test_replaced_feedback_object_cancels_the_pending_roll(self):
+        clock, timers = [650.0], []
+        class Timer:
+            def __init__(self, _delay, callback, args=()): self.callback, self.args = callback, args
+            def start(self): timers.append(self)
+            def cancel(self): pass
+        s = self._ready()
+        self._feedback(s, clock)
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+            s.roll(preroll_s=0)
+            pending = s._roll_pending
+            self._feedback(s, clock)
+            s._roll_go(pending)
+        self.assertEqual(s.started, [])
+        self.assertIsNone(s._roll_pending)
+
+    def test_stop_move_cancels_waiting_and_confirmed_countdown(self):
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                clock, timers = [700.0], []
+                class Timer:
+                    def __init__(self, _delay, callback, args=()): self.callback, self.args = callback, args
+                    def start(self): timers.append(self)
+                    def cancel(self): pass
+                s = self._ready()
+                self._feedback(s, clock)
+                with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+                    s.roll(preroll_s=1)
+                    pending = s._roll_pending
+                    if confirmed:
+                        clock[0] = 701.0; self._tally(s, True, clock[0]); s._roll_go(pending)
+                    s.stop_move()
+                    s._roll_go(pending)
+                self.assertEqual(s.started, [])
+                self.assertIsNone(s._roll_pending)
+                self.assertEqual(s.preroll_until, 0.0)
+
+    def test_roll_refuses_unsafe_capture_feedback_without_a_record_command(self):
+        for name, recording, playback, capture_mode in (
+                ("recording", True, False, 0x01),
+                ("playback", False, True, 0x01),
+                ("photo", False, False, 0x17)):
+            with self.subTest(name=name):
+                clock = [800.0]
+                s = self._ready()
+                self._feedback(s, clock, recording=recording)
+                payload = bytearray(58)
+                payload[0] = 0x80 if recording else 0
+                payload[3] = 0x40 if playback else 0
+                payload[57] = capture_mode
+                s.link.camera_feedback.note(2, 0x80, bytes(payload), now=clock[0])
+                with patch("server.time.monotonic", lambda: clock[0]):
+                    with self.assertRaises(RuntimeError):
+                        s.roll(preroll_s=0)
+                self.assertEqual(s.actions, [])
+
+    def test_a_disarm_during_the_count_cancels_the_move(self):
+        clock = [850.0]
+        s = self._ready()
+        self._feedback(s, clock)
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer"):
+            s.roll(preroll_s=1)
+            pending = s._roll_pending
+            clock[0] = 851.0
+            self._tally(s, True, clock[0])
+            s._roll_go(pending)
+            s.disarm("grab")
+            clock[0] = 852.0
+            s._roll_go(pending)
+        self.assertEqual(s.started, [])
+        self.assertFalse(s.armed)
+        self.assertIsNone(s._roll_pending)
         self.assertEqual(s.preroll_until, 0.0)
+
+    def test_force_preflight_is_retained_until_motion_starts(self):
+        clock, timers, calls = [900.0], [], []
+        class Timer:
+            def __init__(self, _delay, callback, args=()): self.callback, self.args = callback, args
+            def start(self): timers.append(self)
+            def cancel(self): pass
+        s = self._ready()
+        self._feedback(s, clock)
+        s._play_preflight = lambda force=False: calls.append(force)
+        with patch("server.time.monotonic", lambda: clock[0]), patch("server.threading.Timer", Timer):
+            s.roll(preroll_s=0, force=True)
+            pending = s._roll_pending
+            clock[0] = 901.0; self._tally(s, True, clock[0]); s._roll_go(pending)
+        self.assertEqual(calls, [True, True])
+        self.assertEqual(len(s.started), 1)
 
     def test_roll_runs_the_same_preflight_as_play(self):
         s = self._ready()
@@ -1904,7 +2126,7 @@ class TestTimelapseResume(unittest.TestCase):
         from driver.camera_feedback import CameraFeedback
         s.link.healthy = True
         s.link.camera_feedback = CameraFeedback()
-        s.link.camera_feedback.note(2, 0x80, bytes(31))
+        s.link.camera_feedback.note(2, 0x80, bytes(57) + b'\x17')
         s.runner = fake_runner()
         s.armed = True
         p = moves.wrap180(limits.PITCH_ARC.low + limits.PITCH_ARC.usable * .5)
