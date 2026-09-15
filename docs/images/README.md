@@ -1,5 +1,46 @@
 # OsmoDesk images
 
+## Location scenes with active overlays — 2026-09-15
+
+![Riverside location illustration](osmodesk-riverside-overlay-illustration.png)
+
+![Urban night location illustration](osmodesk-night-overlay-illustration.png)
+
+Two new 1536 × 1024 scenes created with the **built-in image-generation tool**.
+The locations were invented to relate to the sample pictures, not to document
+the actual photographers' setups. Both preserve the Pocket 4P equipment identity
+and show the required laptop host. Screens are AI-rendered interpretations of the
+actual captures below, not pixel-exact screenshots or connected-camera evidence.
+All earlier illustrations remain available unchanged.
+
+Actual camera-free captures from source `204884b` (runtime unchanged from the
+earlier source `52044c8`):
+
+- [Shot Studio overlays](studio-overlay-demo-20260915.png): 1440 × 1000;
+  thirds, safe area, center mark and zebra highlights on the sunset.
+- [Sunset cinema overlays](cinema-overlay-demo-20260915.png): 1440 × 1000;
+  thirds/safe areas, zebras, waveform and histogram. Used in the riverside scene.
+- [Night cinema overlays](cinema-night-overlay-demo-20260915.png): 1440 × 1000;
+  thirds/safe areas, peaking, waveform and vectorscope. Used in the night scene.
+
+These tools were enabled through the existing app's controls/handlers. The app
+computed the overlays and scopes from the licensed stills; they were not drawn
+as fake telemetry. A temporary camera-free host supplied synthetic preview
+metadata and denied every POST. The night still was supplied by a local browser
+fixture. No camera connection or physical command was used. Demo/credit labels
+were added to the capture DOM, and the temporary host was stopped afterward.
+Peaking and scopes here describe decoded demo-image pixels, not measured optical
+focus or the camera's raw sensor signal. Keep the [source and license
+credits](demo-samples/README.md) with shared copies.
+
+### Riverside scene prompt
+
+Use case: compositing. Create a NEW photorealistic OsmoDesk field-use illustration, landscape 1536x1024, by moving the equipment from image 1 into a completely different outdoor scene. Input 1: existing illustrated laptop and real DJI Osmo Pocket 4P dual-lens gimbal equipment to preserve as product identities, NOT a background/composition to keep. Input 2: actual OsmoDesk cinema-monitor screenshot, a supporting screen insert to reproduce faithfully. New scene: a quiet wide riverbank at golden-hour sunset, rippled amber water, low tree-lined far bank, natural warm haze matching the sunset inside the screen. A portable matte laptop sits securely on a compact dark folding field table on dry ground well back from the water; the Pocket 4P is beside it on a small tripod, a folded camera bag below, just an operator's relaxed hand near the trackpad. Make the composition entirely new, slightly elevated three-quarter editorial viewpoint, laptop display prominently readable on the left two thirds, correctly scaled Pocket 4P to its right, river behind. No indoor desk, houseplants, coffee mug or books. Preserve the exact Pocket 4P horizontal TWO lens head, gimbal arm, small vertical handle display, joystick, record button; never substitute a Pocket 3 single lens or another camera. The visible laptop screen must closely composite input 2: real sunset photograph, actual thin thirds grid and safe-area rectangles, actual diagonal zebra markings over the sun, lower-left waveform AND histogram, right-side record/joystick controls, bottom tools and Lens. Keep screen graphics anchored inside the screen perspective, never floating in the physical scene. Retain demo label; do not invent readings, a recording tally, focus distances or extra futuristic controls. Laptop is the required running host. Match the setting to the demo subject but do not pretend this is the photographer's real location or an actual test. Natural material wear, credible scale, subdued reflections, screen and camera both sharp, beautiful but candid, no lens-flare spectacle. Readable small lower-right two-line caption on subtle dark backing: 'AI-generated setup · demo still' and 'Photo: AConde11 · CC BY 4.0 · Pocket 3'.
+
+### Night scene prompt
+
+Use case: compositing. Create a NEW photorealistic OsmoDesk nighttime location-shoot illustration, landscape 1536x1024, using image 1 only to preserve the identities of the laptop and DJI Osmo Pocket 4P equipment, NOT its indoor scene or composition. Input 2 is the actual OsmoDesk cinema-monitor screenshot to faithfully insert on the laptop. Entirely new scene: an independent filmmaker's portable station on a broad paved urban plaza at blue hour/night. A modern monumental colonnaded building in the distance is illuminated blue and yellow, relating naturally to the architectural photograph displayed in the demo. Restrained practical street lighting and blue night ambient light, a few distant unidentifiable pedestrian silhouettes, slightly damp paving with subtle reflections, no heavy rain. Foreground laptop on a sturdy closed black equipment case at comfortable working height; Pocket 4P on a compact tabletop tripod beside it and a practical shoulder bag nearby. Close over-the-shoulder composition, dark sleeve and a natural hand near the trackpad, laptop screen as the clear focal point with building context visible beyond. Preserve real Pocket 4P's distinctive TWO horizontal lenses in its gimbal head, compact handle, joystick, red record button, believable size; not a single-lens Pocket 3. On laptop screen faithfully reproduce input 2's photograph and actual OsmoDesk monitoring tools OVER the picture: thin thirds/safe-area lines, magenta peaking marks already present in the source, lower-left green waveform and vectorscope, dark restrained record/joystick/tools controls. Do not add unsupported widgets or fake precise camera readings; preserve STBY/demo state. This is a Python host laptop and browser, no standalone phone claim. Never project UI into the physical air. This is an imagined related shooting setting, not the real sample photographer's setup or proof of camera operation. Realistic materials, comfortable understated cinematic night exposure, screen readable rather than glowing out, camera recognizable, not a neon sci-fi advertisement. Small readable lower-right caption: 'AI-generated setup · demo still'. Second smaller line: 'Photo: Parlamentul Republicii Moldova | Pagina oficială · CC0 1.0'.
+
 ## Current Shot Studio demo — 2026-09-15
 
 ![Current OsmoDesk setup illustration](osmodesk-cinema-workspace-illustration.png)

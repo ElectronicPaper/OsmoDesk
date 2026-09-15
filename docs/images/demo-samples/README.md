@@ -14,10 +14,11 @@ Sources and license statements were checked on 2026-09-15.
 - License: [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
 - Original dimensions: 3492 × 1964.
 
-The downloaded JPEG is unchanged. In the desktop and mobile demo captures it is
-scaled to the monitor viewport. In `osmodesk-cinema-workspace-illustration.png`
-it is further perspective-transformed and AI-rendered as part of an illustrated
-laptop screen. Those adaptations must retain this source, credit, license link
+The downloaded JPEG is unchanged. In the desktop, cinema and mobile demo captures
+it is scaled to the monitor viewport; the overlay captures add app-generated
+guides, zebras and scopes. In `osmodesk-cinema-workspace-illustration.png` and
+`osmodesk-riverside-overlay-illustration.png` it is further perspective-transformed
+and AI-rendered as part of an illustrated laptop screen. Those adaptations must retain this source, credit, license link
 and change notice when shared. The embedded photo remains under CC BY 4.0;
 this notice does not apply that license to OsmoDesk source code or unrelated art.
 
@@ -38,8 +39,11 @@ Suggested credit when sharing the illustration or a sunset screenshot:
 - Original dimensions: 3527 × 1984.
 
 The downloaded JPEG is unchanged. It is scaled to the viewport in
-`studio-night-demo-20260915.png`. Credit is retained even though CC0 does not
-require it. This sample is not used in the AI-generated setup illustration.
+`studio-night-demo-20260915.png`. The app adds peaking, framing guides and scopes
+in `cinema-night-overlay-demo-20260915.png`. The sample is also AI-rendered and
+perspective-transformed in `osmodesk-night-overlay-illustration.png`; the generated
+surroundings are not documentation of the original photographer's setup.
+Credit is retained even though CC0 does not require it.
 
 ## Camera attribution and limits
 

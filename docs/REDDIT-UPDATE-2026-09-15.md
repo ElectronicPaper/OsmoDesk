@@ -23,8 +23,9 @@ Repo: https://github.com/ElectronicPaper/OsmoDesk
 You still need a computer or supported rig host running the Python server;
 the phone is a control screen. I've tested on my Pocket 4P, not the Pocket 3 or 4.
 
-The setup image is AI-generated, based closely on the actual UI shown in the
-screenshots. The demo uses [credited Pocket 3 sample photos](https://github.com/ElectronicPaper/OsmoDesk/blob/main/docs/images/demo-samples/README.md),
+The riverside and night-shoot setup images are AI-generated, based closely on
+the actual UI. Guides, zebras, peaking and scopes in the linked demo screenshots
+are rendered by the app over [credited Pocket 3 sample photos](https://github.com/ElectronicPaper/OsmoDesk/blob/main/docs/images/demo-samples/README.md),
 not live footage. Real setup photos will follow.
 
 I still wish DJI would offer an official Pocket Bluetooth SDK. There are so many

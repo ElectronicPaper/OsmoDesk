@@ -23,15 +23,16 @@ the serial driver remains here only as an optional integration adapter.
 
 ## A look at the setup
 
-![OsmoDesk Shot Studio on a laptop beside a Pocket 4P; AI-generated setup with a credited Pocket 3 sample still](docs/images/osmodesk-cinema-workspace-illustration.png)
+![OsmoDesk riverside demo: a Pocket 4P beside a laptop showing a sunset with framing guides, zebras, waveform and histogram; AI-generated illustration](docs/images/osmodesk-riverside-overlay-illustration.png)
 
-The current Shot Studio layout, illustrated beside a Pocket 4P. The computer runs
-both the Python host and the browser controls. This is an **AI-generated setup
-illustration**, not a real photograph or a live-camera test. The monitor contains
-a licensed Pocket 3 sample still by AConde11, not footage from the pictured rig.
+An imagined riverside setup with OsmoDesk's cinema monitor, framing guides,
+zebras, waveform and histogram. The computer runs both the Python host and the
+browser controls. This is an **AI-generated setup illustration**, not a real
+photograph or a live-camera test. The screen is based on a licensed Pocket 3
+sample still by AConde11, not footage from the pictured Pocket 4P.
 
 [Actual desktop UI capture](docs/images/studio-shoot-demo-20260915.png) ·
-[Night-scene demo](docs/images/studio-night-demo-20260915.png) ·
+[Actual cinema overlay capture](docs/images/cinema-overlay-demo-20260915.png) ·
 [Cinema mobile UI capture](docs/images/cinema-mobile-demo-20260915.png)
 
 These captures use the real interface with camera-free demo data and a saved panel
@@ -39,14 +40,20 @@ arrangement. No private camera footage is included. The stills are examples of
 Pocket 3 imagery, **not a claim of tested Pocket 3 compatibility**.
 See [photo sources and reuse licenses](docs/images/demo-samples/README.md).
 
-![OsmoDesk phone browser with a computer host and Pocket 4P](docs/images/mobile-usage-illustration.png)
+![OsmoDesk urban night demo: architectural sample with peaking, guides, waveform and vectorscope; AI-generated illustration](docs/images/osmodesk-night-overlay-illustration.png)
 
-Mobile: the phone accesses the computer host over your trusted LAN; this is not
-a standalone phone-to-camera app.
+An imagined architectural night shoot, with peaking, framing guides, waveform
+and vectorscope over the demo picture. Based on a CC0 Pocket 3 photograph from
+Parlamentul Republicii Moldova | Pagina oficială.
+[Actual night overlay capture](docs/images/cinema-night-overlay-demo-20260915.png).
 
-The earlier mobile setup image is also AI-generated and uses a disconnected
-interface reference. Generated screens are illustrative, not pixel-exact.
-See [all captures, earlier illustrations and generation notes](docs/images/README.md).
+Both scenes are AI-generated; their screens and surroundings are illustrative,
+not pixel-exact or the sample photographers' documented setups. The overlays in
+the linked captures were calculated by the actual app from the sample stills,
+not invented graphs or measurements from a connected camera.
+Phones access the host over your trusted LAN; this is not a standalone
+phone-to-camera app. See [all captures, earlier illustrations and generation
+notes](docs/images/README.md).
 
 ## Run locally
 
