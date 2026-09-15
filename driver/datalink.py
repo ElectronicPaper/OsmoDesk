@@ -49,6 +49,18 @@ class CameraRequest:
         self.reply = None
         self.error = None
 
+    def cancel(self):
+        """Release an unconsumed receipt without replaying or undoing its command.
+
+        A multi-command operation must abandon the other receipts if one send
+        or acknowledgment fails. Late replies must not keep those slots alive.
+        """
+        with self.link._reply_lock:
+            if self.link._pending_replies.get(self.request.seq) is self:
+                self.error = 'camera request cancelled; command outcome may be unknown'
+                self.link._pending_replies.pop(self.request.seq, None)
+                self.event.set()
+
     def wait(self, timeout=1.5, cancel=None):
         try:
             if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 0 < timeout <= 5:

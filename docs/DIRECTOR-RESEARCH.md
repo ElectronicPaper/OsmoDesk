@@ -198,6 +198,19 @@ The Lens disclosure now says metering must be reviewed/restored on-camera or in
 Mimo. Optical A/B acceptance requires an operator-observed test with that recovery
 path; it remains unverified, rather than being inferred from acknowledgments.
 
+The subsequent Refocus reliability closure preserves the captured four-command
+burst and correlates every acknowledgment before returning success. One shared
+three-second deadline, partial-send cleanup, STOP cancellation, session-loss
+guards and late-reply rejection prevent silent partial success or replay. The
+shared Lens UI requires an exact four-ACK receipt and warns that even failed
+requests may have changed metering. This does not add a metering-restoration opcode.
+The software gate passed 1,350 tests. Real Chrome against the real HTTP handler
+and a simulated camera socket passed A/B success and rejected-ACK cases on all
+three operator pages at 320/390/768/1440 px: 12 layouts, no Lens overflow, and
+44 px minimum buttons. An initial reused-tab load lost three script responses;
+reload and the final fresh-context cases loaded without script or network errors.
+This browser evidence is not physical autofocus or exposure-restoration proof.
+
 Sources: [DJI Pocket 4P specifications](https://store.dji.com/uk/product/osmo-pocket-4p),
 [DJI focus-mode help](https://repair.dji.com/help/content?customId=01700009262&lang=en&paperDocType=ARTICLE&re=US&spaceId=17),
 [confirmed focus burst and autofocus commands](https://github.com/erik-sutton95/OpenPocketCine/blob/9b30b93572797c94db5ad9236fb746410f8d761f/Sources/OpenPocketViewCore/Commands.swift#L270-L313).

@@ -58,7 +58,8 @@ class FakeLink:
 
     def begin_request(self, frame):
         self.send_frame(frame)
-        return SimpleNamespace(wait=lambda **kw: duml.Frame(1, 2, frame.seq, 0xC0, frame.cmd_set, frame.cmd_id, b'\0'))
+        return SimpleNamespace(wait=lambda **kw: duml.Frame(1, 2, frame.seq, 0xC0, frame.cmd_set, frame.cmd_id, b'\0'),
+                               cancel=lambda: None)
 
     def close(self):
         self.closed = True

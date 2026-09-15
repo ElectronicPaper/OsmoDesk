@@ -81,6 +81,7 @@ def state_directory(value: Path | str) -> Path:
 CORE2_FEED_PERIOD_S = 0.25
 MAX_JSON_BODY_BYTES = 64 * 1024
 BROWSER_LEASE_S = 0.5
+REFOCUS_ACK_TIMEOUT_S = 3.0
 WORKSPACE_ROUTES = frozenset({
     "/api/move", "/api/move/retime", "/api/move/offset", "/api/move/reference",
     "/api/moves/save", "/api/moves/load", "/api/moves/delete", "/api/waypoint",
@@ -1189,21 +1190,60 @@ class CameraSession:
             raise RuntimeError("program stopped before zoom dispatch")
         link.send_frame(camera.set_zoom(1 + value * 11))
 
-    @_motion_change
-    def camera_focus_target(self, x, y, acknowledge_exposure=False) -> None:
+    def camera_focus_target(self, x, y, acknowledge_exposure=False) -> dict:
         if acknowledge_exposure is not True:
             raise ValueError("acknowledge that refocus also changes spot exposure metering")
         frames = camera.focus_target_burst(x, y)
-        link, _ = self.require()
-        if self.camera_request_busy:
-            raise RuntimeError('wait for the current camera request')
-        if not getattr(link, "healthy", False):
-            raise RuntimeError("camera link is not healthy")
-        if self.tl_state["running"] or self.preroll_until or self.runner and self.runner.running:
-            raise RuntimeError("stop the program before changing its autofocus target")
-        for frame in frames:
-            link.send_frame(frame)
-        self.camera_state["focus_target"] = {"x": x, "y": y}
+        receipts, cancel = [], None
+        attempted, acknowledged = 0, 0
+        try:
+            with self._motion_lock:
+                link, _ = self.require()
+                if self.camera_request_busy:
+                    raise RuntimeError('wait for the current camera request')
+                if not getattr(link, "healthy", False):
+                    raise RuntimeError("camera link is not healthy")
+                if self.tl_state["running"] or self.preroll_until or self.runner and self.runner.running:
+                    raise RuntimeError("stop the program before changing its autofocus target")
+                deadline = time.monotonic() + REFOCUS_ACK_TIMEOUT_S
+                attempted += 1
+                receipt, cancel = self._begin_camera_request(frames[0])
+                receipts.append(receipt)
+                # Preserve the captured Mimo burst: later commands can be
+                # needed before earlier ACKs arrive. Register every receipt
+                # before its send, send in order, then wait outside the lock.
+                for frame in frames[1:]:
+                    attempted += 1
+                    receipts.append(link.begin_request(frame))
+            for receipt in receipts:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('camera acknowledgment deadline expired')
+                receipt.wait(timeout=remaining, cancel=cancel)
+                acknowledged += 1
+            with self._motion_lock:
+                if cancel.is_set() or self.link is not link or not link.healthy:
+                    raise RuntimeError('refocus interrupted; inspect camera readback')
+                self.camera_state["focus_target"] = {"x": x, "y": y}
+            return {"acknowledged": True, "commands_acknowledged": acknowledged,
+                    "reported": False, "sharpness_verified": False,
+                    "metering_restore_required": True}
+        except (RuntimeError, TimeoutError, OSError) as exc:
+            if not attempted:
+                raise
+            raise RuntimeError(
+                f'Refocus incomplete ({acknowledged}/4 acknowledgments checked): {exc}. '
+                'Spot metering may already have changed. Review and restore metering '
+                'on the camera or in DJI Mimo before retrying; no automatic retry.'
+            ) from exc
+        finally:
+            # A failure in any send/wait must free all four correlation slots,
+            # including receipts whose wait was never reached. This cannot
+            # reverse a command already accepted by the camera.
+            for receipt in receipts:
+                receipt.cancel()
+            if cancel is not None:
+                self._finish_camera_request(cancel)
 
     def camera_set(self, what: str, value) -> None:
         if what == 'capture_mode':
@@ -2759,9 +2799,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True})
             elif self.route == "/api/camera/focus-target":
                 b = self._body()
-                self.session.camera_focus_target(b.get("x"), b.get("y"),
+                result = self.session.camera_focus_target(b.get("x"), b.get("y"),
                     b.get("acknowledge_exposure", False))
-                self._json({"ok": True, "reported": False})
+                self._json({"ok": True, **result})
             elif self.route == "/api/take":
                 b = self._body()
                 self._json({"ok": True, "take": self.session.log_take(

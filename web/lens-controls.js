@@ -127,8 +127,10 @@
       async function send(path, body, label) {
         if (destroyed || blocked()) return;
         const ticket = session;
+        const refocus = path === '/api/camera/focus-target';
         busy = true;
-        note(`${label} requested. Awaiting host response; camera state is not confirmed.`);
+        note(refocus ? `${label} requested. Awaiting all four command acknowledgments.` :
+          `${label} requested. Awaiting host response; camera state is not confirmed.`);
         render();
         let timeout;
         try {
@@ -137,14 +139,24 @@
             new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('timeout')), REQUEST_TIMEOUT_MS); })
           ]);
           if (!result || result.ok === false) throw new Error('request failed');
-          if (ticket === session) note(`${label} request sent. Readback above is independent; focus sharpness is not confirmed.`);
+          if (refocus && !acknowledgedRefocus(result)) throw new Error('incomplete refocus receipt');
+          if (ticket === session) note(refocus ?
+            'Refocus commands acknowledged 4/4. Sharpness unconfirmed. Review and restore metering on the camera or in DJI Mimo.' :
+            `${label} request sent. Readback above is independent; focus sharpness is not confirmed.`);
         } catch (_) {
-          if (ticket === session) note(`${label} request failed or timed out. Outcome unknown; inspect camera readback before trying again.`);
+          if (ticket === session) note(refocus ?
+            'Refocus receipt missing, incomplete, failed or timed out. Metering may have changed; inspect the camera or DJI Mimo before retry. No retry was sent.' :
+            `${label} request failed or timed out. Outcome unknown; inspect camera readback before trying again.`);
         } finally {
           clearTimeout(timeout);
           busy = false;
           render();
         }
+      }
+      function acknowledgedRefocus(result) {
+        return result?.ok === true && result.acknowledged === true &&
+          result.commands_acknowledged === 4 && result.reported === false &&
+          result.sharpness_verified === false && result.metering_restore_required === true;
       }
       function requestZoom(value) {
         if (zoomBlocked() || !finite(value) || value < 1 || value > 12) return;

@@ -26,6 +26,16 @@ def reply_for(request, payload=b'\0', **over):
     return duml.Frame(**args)
 
 class TestCameraRequests(unittest.TestCase):
+    def test_abandoned_receipt_releases_slot_and_late_ack_cannot_revive_it(self):
+        link = make_link(); request = commands.photo(); receipt = link.begin_request(request)
+        receipt.cancel()
+        receipt.cancel()  # Cleanup is idempotent and never sends a command.
+        self.assertEqual(link._pending_replies, {})
+        link._handle(reply_for(request))
+        with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+            receipt.wait()
+        self.assertEqual(len(link.sock.sent), 1)
+
     def test_success_before_wait(self):
         link = make_link(); req = commands.photo(); receipt = link.begin_request(req)
         link._handle(reply_for(req))

@@ -11,6 +11,7 @@ import server
 from driver import camera, moves, timelapse
 from driver.camera_feedback import CameraFeedback
 from tests.test_camera_feedback import subscription
+from tests.test_camera_requests import make_link, reply_for
 from tests.test_server import make_args, FakeLink, FakeStick, fake_runner
 
 
@@ -36,7 +37,10 @@ class CameraCompletionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.s.camera_focus_target(.2, .3, ack)
         self.assertEqual(self.s.link.frames, [])
-        self.s.camera_focus_target(.2, .3, True)
+        result = self.s.camera_focus_target(.2, .3, True)
+        self.assertEqual(result, {'acknowledged': True, 'commands_acknowledged': 4,
+                                 'reported': False, 'sharpness_verified': False,
+                                 'metering_restore_required': True})
         self.assertEqual([(f.cmd_id,len(f.payload)) for f in self.s.link.frames], [(0x22,1),(0x30,21),(0x68,1),(0x32,20)])
         for value in (True, -1, float('nan'), '0.5'):
             with self.assertRaises(ValueError):
@@ -55,6 +59,20 @@ class CameraCompletionTests(unittest.TestCase):
         self.s.armed = False
         with self.assertRaises(RuntimeError): self.s._program_zoom(.1)
         self.assertEqual(len(self.s.link.frames), 1)
+
+    def test_refocus_all_waits_share_one_deadline(self):
+        clock, timeouts = [100.0], []
+        def wait(timeout, cancel):
+            timeouts.append(timeout)
+            clock[0] += .5
+        def begin(frame):
+            self.s.link.frames.append(frame)
+            return SimpleNamespace(wait=wait, cancel=lambda: None)
+        self.s.link.begin_request = begin
+        with patch.object(server.time, 'monotonic', side_effect=lambda: clock[0]):
+            self.s.camera_focus_target(.2, .3, True)
+        self.assertEqual(timeouts, [3.0, 2.5, 2.0, 1.5])
+        self.assertFalse(self.s.camera_request_busy)
 
     def test_failed_runner_never_reaches_photo(self):
         self.s.runner.fault = 'telemetry lost'
@@ -286,3 +304,153 @@ class CameraCompletionTests(unittest.TestCase):
                 release.set();worker.join(2)
                 if stopper.ident: stopper.join(2)
         self.assertFalse(self.s.armed)
+
+
+class RefocusReceiptTests(unittest.TestCase):
+    """Real correlation engine, simulated socket: no optical/hardware proof."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.s = server.CameraSession(make_args(), workspace_root=Path(directory.name))
+        self.link = make_link()
+        self.addCleanup(self.link.close)
+        self.s.link, self.s.stick = self.link, FakeStick()
+        self.sent = []
+        self.after_burst = None
+        self.link.send_frame = self.send
+
+    def send(self, frame):
+        self.sent.append(frame)
+        if len(self.sent) == 4 and self.after_burst:
+            self.after_burst()
+        return True
+
+    def acknowledge(self, rejected=None):
+        # Replies may arrive before begin_request returns, and out of order.
+        for index, frame in reversed(list(enumerate(self.sent))):
+            self.link._handle(reply_for(frame, b'\xd9' if index == rejected else b'\0',
+                                        cmd_id=frame.cmd_id))
+
+    def assert_released(self):
+        self.assertEqual(self.link._pending_replies, {})
+        self.assertFalse(self.s.camera_request_busy)
+
+    def test_complete_burst_precedes_wait_and_out_of_order_acks_succeed(self):
+        self.after_burst = self.acknowledge
+        result = self.s.camera_focus_target(.2, .3, True)
+        self.assertEqual([f.cmd_id for f in self.sent], [0x22, 0x30, 0x68, 0x32])
+        self.assertEqual(len({f.seq for f in self.sent}), 4)
+        self.assertEqual(result['commands_acknowledged'], 4)
+        self.assertFalse(result['sharpness_verified'])
+        self.assertFalse(result['reported'])
+        self.assertTrue(result['metering_restore_required'])
+        self.assertEqual(self.s.camera_state['focus_target'], {'x': .2, 'y': .3})
+        self.assert_released()
+
+    def test_any_rejected_ack_is_partial_failure_not_success_or_retry(self):
+        for index in range(4):
+            with self.subTest(rejected=index):
+                self.sent.clear()
+                self.after_burst = lambda: self.acknowledge(rejected=index)
+                with self.assertRaisesRegex(RuntimeError, 'Spot metering may already have changed'):
+                    self.s.camera_focus_target(.2, .3, True)
+                self.assertEqual(len(self.sent), 4)
+                self.assertNotIn('focus_target', self.s.camera_state)
+                self.assert_released()
+
+    def test_partial_send_failure_releases_even_never_waited_receipts(self):
+        for index in range(4):
+            with self.subTest(send_failure=index):
+                self.sent.clear()
+                def failed(frame):
+                    self.sent.append(frame)
+                    return len(self.sent) != index + 1
+                self.link.send_frame = failed
+                with self.assertRaisesRegex(RuntimeError, 'no automatic retry'):
+                    self.s.camera_focus_target(.2, .3, True)
+                self.assertEqual(len(self.sent), index + 1)
+                self.assertNotIn('focus_target', self.s.camera_state)
+                self.assert_released()
+
+    def test_missing_ack_times_out_once_and_abandons_other_receipts(self):
+        with patch.object(server, 'REFOCUS_ACK_TIMEOUT_S', .03):
+            with self.assertRaisesRegex(RuntimeError, 'Spot metering'):
+                self.s.camera_focus_target(.2, .3, True)
+        self.assertEqual(len(self.sent), 4)
+        self.assertNotIn('focus_target', self.s.camera_state)
+        self.assert_released()
+        self.acknowledge()  # A late ACK is not a success receipt or new target.
+        self.assertNotIn('focus_target', self.s.camera_state)
+        self.assert_released()
+
+    def test_stop_cancels_wait_without_holding_motion_lock_or_replaying(self):
+        entered, errors = threading.Event(), []
+        self.after_burst = entered.set
+        self.s.armed = True
+        def run():
+            try:
+                self.s.camera_focus_target(.2, .3, True)
+            except RuntimeError as exc:
+                errors.append(str(exc))
+        worker = threading.Thread(target=run)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(.5))
+            # If the request wait owns _motion_lock this cannot acquire it.
+            acquired = self.s._motion_lock.acquire(timeout=.2)
+            self.assertTrue(acquired, 'ACK wait blocked STOP admission')
+            if acquired:
+                self.s._motion_lock.release()
+            self.s.stop_everything()
+            worker.join(.3)
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(errors)
+            self.assertFalse(self.s.armed)
+            self.assertEqual(len(self.sent), 4)
+            self.assertNotIn('focus_target', self.s.camera_state)
+            self.assert_released()
+        finally:
+            self.s._camera_cancel.set()
+            worker.join(1)
+
+    def test_stop_or_replaced_link_after_acks_cannot_publish_success(self):
+        for action in ('stop', 'replace', 'loss'):
+            with self.subTest(action=action):
+                self.sent.clear()
+                self.s.link = self.link
+                self.link.last_rx_at = server.time.monotonic()
+                def finish():
+                    self.acknowledge()
+                    if action == 'stop': self.s.stop_everything()
+                    elif action == 'replace': self.s.link = FakeLink()
+                    else: self.link.last_rx_at = 0
+                self.after_burst = finish
+                with self.assertRaises(RuntimeError):
+                    self.s.camera_focus_target(.2, .3, True)
+                self.assertNotIn('focus_target', self.s.camera_state)
+                self.assertEqual(len(self.sent), 4)
+                self.assert_released()
+
+    def test_admission_failure_preserves_other_inflight_request(self):
+        self.s.camera_request_busy = True
+        other_cancel = self.s._camera_cancel
+        with self.assertRaisesRegex(RuntimeError, 'current camera request'):
+            self.s.camera_focus_target(.2, .3, True)
+        self.assertTrue(self.s.camera_request_busy)
+        self.assertIs(self.s._camera_cancel, other_cancel)
+        self.assertFalse(other_cancel.is_set())
+        self.assertEqual(self.sent, [])
+
+    def test_program_countdown_or_dead_link_sends_nothing(self):
+        for mode in ('program', 'countdown', 'timelapse', 'dead'):
+            with self.subTest(mode=mode):
+                self.s.runner = fake_runner() if mode == 'program' else None
+                if self.s.runner: self.s.runner.running = True
+                self.s.preroll_until = 10 if mode == 'countdown' else 0
+                self.s.tl_state['running'] = mode == 'timelapse'
+                self.link.last_rx_at = 0 if mode == 'dead' else server.time.monotonic()
+                with self.assertRaises(RuntimeError):
+                    self.s.camera_focus_target(.2, .3, True)
+                self.assertEqual(self.sent, [])
+                self.assert_released()

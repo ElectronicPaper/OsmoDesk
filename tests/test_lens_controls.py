@@ -67,6 +67,10 @@ class Element {
   fire(type) { this.events[type]?.({target:this}); }
 }
 let now = 0, tick;
+let timeoutId = 0;
+const timeouts = new Map();
+global.setTimeout = fn => { const id = ++timeoutId; timeouts.set(id, fn); return id; };
+global.clearTimeout = id => timeouts.delete(id);
 global.window = {};
 global.document = {createElement: () => new Element(), activeElement:null};
 global.performance = {now: () => now};
@@ -74,12 +78,13 @@ global.setInterval = fn => { tick = fn; return 1; };
 global.clearInterval = () => { tick = null; };
 vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
 const calls = [];
-let fail = false, resolvePending = null, pending = false;
+let fail = false, rejectWith = null, resolvePending = null, pending = false, responses = [];
 const host = new Element();
 const api = window.OsmoLens.mount(host, {post: (path, body) => {
   calls.push({path,body});
   if (pending) return new Promise(resolve => { resolvePending = resolve; });
-  return fail ? Promise.reject(new Error('<img src=x onerror=secret()>')) : Promise.resolve({ok:true});
+  if (rejectWith) return Promise.reject(new Error(rejectWith));
+  return fail ? Promise.reject(new Error('<img src=x onerror=secret()>')) : Promise.resolve(responses.length ? responses.shift() : {ok:true});
 }});
 const node = name => host.child.nodes[name];
 const flush = async () => { for(let i=0;i<6;i++) await Promise.resolve(); };
@@ -133,6 +138,37 @@ const status = () => ({connected:true,link_healthy:true,owner:'none',ssid:'OsmoP
   assert.deepEqual(calls.pop(),{path:'/api/camera/focus-target',body:{x:0.5,y:0.5,acknowledge_exposure:true}});
   node('recall-b').fire('click'); await flush();
   assert.equal(calls.pop().body.x,0.1);
+  const reportedPoint = node('point').textContent;
+  const receipt = {ok:true,acknowledged:true,commands_acknowledged:4,reported:false,sharpness_verified:false,metering_restore_required:true};
+  responses.push(receipt); node('recall-a').fire('click'); await flush();
+  assert.equal(calls.length,1,'a successful refocus has one request');
+  assert.deepEqual(calls.pop(),{path:'/api/camera/focus-target',body:{x:0.5,y:0.5,acknowledge_exposure:true}});
+  assert.match(node('request').textContent,/acknowledged 4\/4/);
+  assert.match(node('request').textContent,/Sharpness unconfirmed/);
+  assert.match(node('request').textContent,/restore metering/);
+  assert.equal(node('point').textContent,reportedPoint,'a receipt cannot rewrite the reported target');
+  for (const response of [null, {ok:true,acknowledged:true,commands_acknowledged:3,reported:false,sharpness_verified:false,metering_restore_required:true},
+      {ok:true,acknowledged:true,commands_acknowledged:4,reported:true,sharpness_verified:false,metering_restore_required:true}]) {
+    responses.push(response); node('recall-a').fire('click'); await flush();
+    assert.equal(calls.length,1,'malformed or partial receipt is never replayed'); calls.pop();
+    assert.match(node('request').textContent,/Metering may have changed/);
+    assert.match(node('request').textContent,/before retry/);
+  }
+  fail=true; node('recall-a').fire('click'); await flush(); calls.pop();
+  assert.match(node('request').textContent,/Metering may have changed/);
+  fail=false; rejectWith='timeout'; node('recall-a').fire('click'); await flush(); calls.pop(); rejectWith=null;
+  assert.match(node('request').textContent,/timed out/);
+  assert.equal(node('point').textContent,reportedPoint,'failed refocus cannot rewrite reported target');
+  pending=true; node('recall-a').fire('click');
+  assert.equal(calls.length,1); calls.pop();
+  assert.equal(timeouts.size,1);
+  timeouts.values().next().value(); await flush();
+  assert.match(node('request').textContent,/timed out/,'the actual timeout handler fails closed');
+  assert.equal(timeouts.size,0);
+  const timedOutText = node('request').textContent;
+  resolvePending(receipt); await flush(); pending=false;
+  assert.equal(node('request').textContent,timedOutText,'late success cannot overwrite a timeout');
+  assert.equal(calls.length,0,'timeout never resends the request');
   node('x').value=''; node('refocus').fire('click');
   node('x').value='NaN'; node('refocus').fire('click');
   node('x').value='1.01'; node('refocus').fire('click');
