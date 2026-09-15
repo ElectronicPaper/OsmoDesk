@@ -94,6 +94,19 @@ async function main(){
   // Existing specialist surfaces share settings/help without replacing their
   // native picture, tactile controls or transition engine.
   for(const route of ['/mobile','/cine']){await p.goto(base+route);await p.getByRole('button',{name:'Settings',exact:true}).click();await until(()=>p.locator('#ssNotice').textContent().then(t=>t.includes('loaded')),'specialist settings '+route);await p.getByRole('button',{name:'Close Studio settings'}).click();}
+  for(const route of ['/panel','/mobile','/cine']){
+    await p.goto(base+route);
+    await p.getByRole('button',{name:'Lens',exact:true}).click();
+    const lens=p.getByRole('dialog',{name:'Lens & Focus',exact:true});
+    await lens.locator('summary').click();
+    assert(await lens.locator('[data-lens="refocus"]').isDisabled(),'disconnected refocus disabled');
+    assert(await lens.locator('[data-lens="range"]').isDisabled(),'unknown zoom disabled');
+    for(const width of [320,390,768,1440]){
+      await p.setViewportSize({width,height:900});
+      assert(await lens.evaluate(n=>n.scrollWidth<=n.clientWidth+1),'lens overflow '+route+' '+width);
+    }
+    await p.getByRole('button',{name:'Close Lens & Focus',exact:true}).click();
+  }
   assert.deepEqual(errors,[]);assert(!posts.some(v=>v.startsWith('/api/assistant/')),'no paid request');
   console.log('PASS: Snapgrid pointer/keyboard/resize/pin/hide/restore/reset/persistence, 15 overlap-free responsive layouts, stable control DOM, local AI key settings/removal, repeated crew issuance/copy and expiring cookie/revocation, guide/tooltips, editorial download, shared mobile/monitor settings. No provider/hardware call.');
  }finally{await browser.close();}

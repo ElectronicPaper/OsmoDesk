@@ -11,9 +11,17 @@
     const utilities=document.createElement('div');utilities.className='osmo-utilities';
     function utility(label,type){const b=document.createElement('button');b.type='button';b.append(icon(type),document.createTextNode(label));b.title=label;b.className='osmo-utility';utilities.append(b);return b;}
     const settingsButton=utility('Settings','settings'),helpButton=utility('Guide','help');
+    const lensButton=utility('Lens','shoot');
+    lensButton.title='Lens, autofocus and refocus targets';
     (host||document.body).append(utilities);if(!host)utilities.classList.add('osmo-floating');
     function modal(label){const dialog=document.createElement('dialog');dialog.className='osmo-dialog';dialog.setAttribute('aria-label',label);const head=document.createElement('div');head.className='osmo-dialog-head';const title=document.createElement('strong');title.textContent=label;const close=document.createElement('button');close.type='button';close.append(icon('close'));close.setAttribute('aria-label','Close '+label);close.onclick=()=>dialog.close();head.append(title,close);const content=document.createElement('div');dialog.append(head,content);document.body.append(dialog);dialog.addEventListener('keydown',e=>e.stopPropagation());dialog.addEventListener('cancel',e=>e.stopPropagation());return {dialog,content};}
     const settings=modal('Studio settings'),help=modal('OsmoDesk field guide');
+    const lens=modal('Lens & Focus');
+    lens.dialog.style.width='min(520px,calc(100% - 24px))';
+    const lensUI=window.OsmoLens?.mount(lens.content,{post});
+    let lensStatus=null;
+    lensButton.onclick=()=>{if(lensStatus?.clutch?.engaged||lensStatus?.move?.running||lensStatus?.timelapse?.running)return;lens.dialog.showModal();};
+    window.addEventListener('osmo-status',event=>{lensStatus=event.detail;lensUI?.update({...lensStatus,connected:lensStatus?.state==='connected'});lensButton.disabled=!!(lensStatus?.clutch?.engaged||lensStatus?.move?.running||lensStatus?.timelapse?.running);});
     const settingsUI=createStudioSettings(settings.content,{post,reload});
     function openSettings(){if(!canArrange())return;settings.dialog.showModal();settingsUI.activate();}
     settingsButton.onclick=openSettings;window.addEventListener('osmo-open-settings',openSettings);

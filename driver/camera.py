@@ -12,6 +12,7 @@ Send it, watch for the ACK, and check the camera body.
 from __future__ import annotations
 
 import struct
+import math
 from dataclasses import dataclass
 
 from . import duml
@@ -21,6 +22,20 @@ from .duml import Frame
 def _cam(cmd: int, payload: bytes, seq: int = 0) -> Frame:
     return Frame(duml.SENDER_APP, duml.RX_CAMERA, seq, duml.FLAG_REQUEST,
                  0x02, cmd, payload)
+
+
+def focus_target_burst(x: float, y: float) -> list[Frame]:
+    """Documented Pocket AF region burst; ALSO sets spot exposure metering.
+
+    OpenPocketCine Commands.swift at 9b30b93572797c94db5ad9236fb746410f8d761f.
+    This is autofocus targeting, not a manual lens-distance command.
+    """
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or
+           not math.isfinite(v) or not 0 <= v <= 1 for v in (x, y)):
+        raise ValueError("focus coordinates must be finite numbers from 0 to 1")
+    xy = struct.pack('<ff', x, y)
+    return [_cam(0x22, b'\x02'), _cam(0x30, xy + bytes(13)),
+            _cam(0x68, b'\x08'), _cam(0x32, b'\x00\x02\x01\x00' + xy + bytes(8))]
 
 
 # --- exposure ---------------------------------------------------------------
@@ -109,15 +124,13 @@ def set_resolution(resolution: str, fps: str, seq: int = 0) -> Frame:
 
 
 def set_zoom_lens(lens: int, seq: int = 0) -> Frame:
-    """0x02/0xb8 -- slider form `0A 4E` with the lens position at offset 14.
+    """0x02/0xb8 SET: `0A 4E <lens u16-LE>` (four bytes).
 
-    Mimo's pinch from 1x to 12x uses only this form, at roughly 20 Hz.
+    Offset 14 belongs to the incoming cam_lens_state, NOT this SET payload.
+    Pinned OpenPocketCine Commands.swift constructs this four-byte form.
     """
     lens = max(ZOOM_LENS["1x"], min(ZOOM_LENS["12x"], int(lens)))
-    p = bytearray(16)
-    p[0], p[1] = 0x0A, 0x4E
-    p[14], p[15] = lens & 0xFF, (lens >> 8) & 0xFF
-    return _cam(0xB8, bytes(p), seq)
+    return _cam(0xB8, b'\x0a\x4e' + struct.pack('<H', lens), seq)
 
 
 def set_zoom(factor: float, seq: int = 0) -> Frame:

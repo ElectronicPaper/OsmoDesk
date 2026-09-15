@@ -28,7 +28,7 @@
       <section class="d-score"><div class="d-scorehead"><div><div class="d-kicker">Shot score</div><h3>Your framing beats</h3></div><div class="d-actions"><button id="dEdit" disabled>Edit selected beat ↗</button><button id="dRefresh">Refresh analysis</button></div></div>
         <div id="dBeats" class="d-beats" aria-label="Select a framing beat"></div>
         <div class="d-evidence"><h3 id="dCheckTitle">Path check</h3><ul id="dFindings" class="d-findings"></ul><p id="dLimits" class="d-foot"></p></div>
-        <p class="d-foot">This is sampled gimbal-angle arithmetic, not a view through the lens or a physical guarantee. Zoom marks are planned only. Verify the rig and actual footage before relying on a shot.</p>
+        <p class="d-foot">This is sampled gimbal-angle arithmetic, not a view through the lens or a physical guarantee. Zoom tracks execute when camera readback permits; this preview does not prove lens response. Verify actual footage before relying on a shot.</p>
       </section>`;
     const el=id=>root.querySelector('#'+id);
     let data=null, shown=null, candidate=null, original=null, undo=null, requestId=0, displayPoints=[];

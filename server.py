@@ -41,6 +41,7 @@ from driver import (assistant, camera, census, commands, config, crew, director,
                     timelapse, transport, wifi)
 from driver.datalink import Datalink
 from driver.gimbal import GimbalStick, MoveRunner, TILT_SIGN, YAW_SIGN
+from driver.camera_feedback import CameraFeedback
 from driver.liveview import LiveView
 from driver.clutch import Clutch, GAINS
 from driver.limits import LimitMonitor
@@ -349,7 +350,8 @@ class CameraSession:
                 link.send_frame(commands.live_view_enable())
             stick = GimbalStick(link, gain=self.args.gain)
             stick.start()
-            runner = MoveRunner(link, stick, kp=self.args.kp, limits=self.limits)
+            runner = MoveRunner(link, stick, kp=self.args.kp, limits=self.limits,
+                                on_zoom=self._program_zoom)
             with self._lock:
                 current()
                 stick.set_speed_cap(
@@ -475,16 +477,21 @@ class CameraSession:
                          "stop_time": round(r.stop_time, 2)}
                         for r in shaping.RAMPS.values()]
         out["invert"] = {"tilt": self.invert_tilt, "pan": self.invert_pan}
-        # `reported` is the important field: everything in here is what this
-        # panel last asked for, and nothing in the implemented protocol reads
-        # the camera's own exposure or tally back.
+        # Legacy camera values remain requests. Per-field fresh measurements
+        # live in camera_feedback; never promote the whole request cache.
         out["camera"] = dict(self.camera_state, reported=False)
+        feedback = self._camera_feedback()
+        out["camera_feedback"] = feedback
         out["shutter"] = self.shutter_info()
         out["link_healthy"] = bool(self.link is not None and
                                    getattr(self.link, "healthy", True))
         out["preroll"] = {"seconds": self.preroll_s,
                           "until": self.preroll_until}
-        out["recording"] = {"on": self.recording, "reported": False,
+        tally = feedback["recording"]
+        out["recording"] = {"on": tally["value"] if tally["reported"] else self.recording,
+                            "reported": tally["reported"], "requested": self.recording,
+                            "age_s": tally["age_s"],
+                            "elapsed_s": feedback["record_seconds"]["value"],
                             "since": self.recording_since}
         out["core2"] = self.core2.status.to_dict() if self.core2 else {"connected": False}
         if self.link is not None and self.link.attitude is not None:
@@ -1124,6 +1131,7 @@ class CameraSession:
         self.owner = "none"
         self.disarm(reason)
 
+    @_motion_change
     def disarm(self, reason: str = "operator") -> None:
         was = self.armed
         self.armed = False
@@ -1146,8 +1154,56 @@ class CameraSession:
 
     # -- camera -------------------------------------------------------------
 
+    def _camera_feedback(self) -> dict:
+        link = self.link
+        source = getattr(link, "camera_feedback", None)
+        if source is None or not getattr(link, "healthy", True):
+            return CameraFeedback().snapshot()
+        return source.snapshot()
+
+    def _zoom_ready(self) -> dict:
+        feedback = self._camera_feedback()
+        if not all(feedback[k]["reported"] for k in ("zoom", "color")):
+            raise RuntimeError("wait for fresh camera zoom and color readback")
+        if feedback["color"]["value"] == "d-log2":
+            raise RuntimeError("zoom is unavailable in D-Log2; change color explicitly first")
+        return feedback
+
+    def _program_zoom(self, value: float) -> None:
+        if not self.armed or self.owner != "program":
+            raise RuntimeError("program no longer owns zoom")
+        link, _ = self.require()
+        self._zoom_ready()
+        if not self.armed or self.owner != "program" or self.runner and self.runner._stop.is_set():
+            raise RuntimeError("program stopped before zoom dispatch")
+        link.send_frame(camera.set_zoom(1 + value * 11))
+
+    @_motion_change
+    def camera_focus_target(self, x, y, acknowledge_exposure=False) -> None:
+        if acknowledge_exposure is not True:
+            raise ValueError("acknowledge that refocus also changes spot exposure metering")
+        frames = camera.focus_target_burst(x, y)
+        link, _ = self.require()
+        if not getattr(link, "healthy", False):
+            raise RuntimeError("camera link is not healthy")
+        if self.tl_state["running"] or self.preroll_until or self.runner and self.runner.running:
+            raise RuntimeError("stop the program before changing its autofocus target")
+        for frame in frames:
+            link.send_frame(frame)
+        self.camera_state["focus_target"] = {"x": x, "y": y}
+
+    @_motion_change
     def camera_set(self, what: str, value) -> None:
         link, _ = self.require()
+        if what in ("zoom", "focus_continuous", "color") and (
+                self.tl_state["running"] or self.preroll_until or self.runner and self.runner.running):
+            raise RuntimeError("stop the program or countdown before changing lens settings")
+        if what == "zoom":
+            if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or not 1 <= value <= 12:
+                raise ValueError("zoom must be a finite number from 1 to 12")
+            if self.tl_state["running"] or self.runner and self.runner.running:
+                raise RuntimeError("stop the program before changing its zoom")
+            self._zoom_ready()
         builders = {
             "iso": lambda v: camera.set_iso(str(v)),
             "shutter": lambda v: camera.set_shutter(int(v)),
@@ -1478,6 +1534,7 @@ class CameraSession:
             "plan": got.get("plan"),
         }
 
+    @_motion_change
     def timelapse_start(self, resume: bool = False, **kw) -> dict:
         """Step the head through the move, taking one frame at each stop."""
         _, _ = self.require()
@@ -1514,8 +1571,23 @@ class CameraSession:
         else:
             plan = timelapse.plan_for(self.move, **kw)
 
-        if plan.mode != "sms":
-            raise ValueError("continuous timelapse is planning-only; use shoot-move-shoot to run")
+        shot = moves.Move.from_dict(copy.deepcopy(self.move.to_dict()))
+        if shot.loop or shot.ping_pong or any(w.cue for w in shot.waypoints):
+            raise ValueError("timelapse needs one finite path without loops, ping-pong or cue holds")
+        self._timelapse_camera_ready()
+        if plan.mode == "continuous":
+            if resume:
+                raise RuntimeError("continuous time cannot be recovered after an interruption; start a new sequence")
+            path = timelapse.continuous_plan_move(shot, plan)
+            att = self.link.attitude
+            if not path.at_start(att.pitch, att.yaw):
+                raise RuntimeError("Back to one before continuous timelapse; its first exposure starts at P1")
+            if path.sample_zoom(0) is not None:
+                self._zoom_path_ready(path)
+        else:
+            path = None
+            if shot.has_zoom:
+                self._zoom_path_ready(shot)
 
         poses = timelapse.frame_poses(self.move, plan.frames)
         if len(poses) < 2:
@@ -1545,27 +1617,118 @@ class CameraSession:
         self._tl_stop.clear()
         self.tl_state = {"running": True, "frame": done, "frames": plan.frames,
                          "error": None, "plan": plan.to_dict(),
+                         "capture_reported": False, "phase": "starting",
                          "resumed_from": done if resume else 0}
         self._tl_thread = threading.Thread(
-            target=self._timelapse_worker, args=(poses, plan, done), daemon=True)
+            target=self._continuous_timelapse_worker if path else self._timelapse_worker,
+            args=(path, shot, plan) if path else (poses, plan, done, shot), daemon=True)
         self._tl_thread.start()
         return dict(self.tl_state)
 
+    @_motion_change
     def timelapse_stop(self) -> None:
         """Stop between frames. The head is left wherever it got to."""
         self._tl_stop.set()
+        if self.tl_state["running"] and self.runner is not None:
+            self.runner.stop(aborted=True)
 
-    def _timelapse_worker(self, poses, plan, done: int = 0) -> None:
+    def _timelapse_camera_ready(self) -> None:
+        link, _ = self.require()
+        if not getattr(link, "healthy", False) or link.attitude is None:
+            raise RuntimeError("fresh camera link and gimbal telemetry required for timelapse")
+        tally = self._camera_feedback()["recording"]
+        if not tally["reported"] or tally["value"] or self.recording:
+            raise RuntimeError("timelapse needs camera-reported standby; stop recording and wait for readback")
+        if not self.armed:
+            raise RuntimeError("disarmed mid-timelapse")
+
+    def _timelapse_capture(self, shot, plan, frame):
+        with self._motion_lock:
+            self._timelapse_camera_ready()
+            if self._tl_stop.is_set():
+                return False
+            if self.owner != "program" or self.runner.fault or self.runner.report.aborted:
+                raise RuntimeError("motion ownership or tracking failed; no photo requested")
+            self.link.send_frame(commands.photo())
+            self.tl_state = dict(self.tl_state, frame=frame, phase="capture requested")
+        # Storage must never hold the motion lock: STOP still works on a slow disk.
+        timelapse.save_progress(self.state_dir, shot, plan, frame, time.time())
+        return True
+
+    def _continuous_timelapse_worker(self, path, shot, plan):
+        """One existing motion clock; never catch up missed exposures in a burst."""
+        try:
+            if not self._timelapse_run(path):
+                return
+            for i in range(plan.frames):
+                due = i * plan.per_frame_s
+                deadline = time.monotonic() + plan.per_frame_s + 5
+                while self.runner.elapsed < due:
+                    if self._sleep_or_stop(0.01):
+                        return
+                    self._timelapse_camera_ready()
+                    if not self.runner.running or self.runner.fault:
+                        raise RuntimeError("continuous move ended before its exposure")
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("continuous motion clock stopped advancing")
+                if self._tl_stop.is_set():
+                    return
+                if self.runner.fault or self.runner.report.aborted:
+                    raise RuntimeError("continuous motion failed; no photo requested")
+                if self.runner.elapsed - due > min(0.25, plan.per_frame_s * .5):
+                    raise RuntimeError("exposure deadline missed; stopped without a catch-up burst")
+                if not self._timelapse_capture(shot, plan, i + 1):
+                    return
+            finish_at = time.monotonic() + plan.per_frame_s
+            while time.monotonic() < finish_at:
+                if self._sleep_or_stop(.02):
+                    return
+                self._timelapse_camera_ready()
+                if self.runner.fault or self.runner.report.aborted:
+                    raise RuntimeError("motion failed during final exposure window")
+        except Exception as exc:
+            log.exception("continuous timelapse failed")
+            self.tl_state = dict(self.tl_state, error=f"{type(exc).__name__}: {exc}")
+        finally:
+            self._finish_timelapse()
+
+    @_motion_change
+    def _timelapse_run(self, path):
+        if self._tl_stop.is_set() or not self.armed or self.owner != "program":
+            return False
+        self._timelapse_camera_ready()
+        self.runner.start(path)
+        return True
+
+    def _finish_timelapse(self):
+        with self._motion_lock:
+            if self.owner == "program" and self.runner is not None:
+                self.runner.stop(aborted=bool(self._tl_stop.is_set() or self.tl_state.get("error")))
+            if self.owner == "program" and self.stick is not None:
+                self.stick.abort()
+            if self.owner == "program":
+                self.owner = "none"
+            complete = (not self.tl_state.get("error") and not self._tl_stop.is_set() and
+                        self.tl_state.get("frame", 0) >= self.tl_state.get("frames", 0))
+        # Keep running reserved until storage cleanup completes, but don't block STOP.
+        if complete:
+            timelapse.clear_progress(self.state_dir)
+        with self._motion_lock:
+            self.tl_state = dict(self.tl_state, running=False, phase="stopped")
+
+    def _timelapse_worker(self, poses, plan, done: int = 0, shot=None) -> None:
         # A hop per frame, reusing the same runner that plays an ordinary move
         # rather than a second motion path -- one place where easing, soft
         # limits and the deadman live.
         hop_s = max(0.25, plan.settle_s)
+        shot = shot or moves.Move.from_dict(copy.deepcopy(self.move.to_dict()))
         try:
             for i, (pitch, yaw) in enumerate(poses):
                 if self._tl_stop.is_set():
                     break
                 if not self.armed:
                     raise RuntimeError("disarmed mid-timelapse")
+                self._timelapse_camera_ready()
 
                 hop = moves.Move(name="tl", waypoints=[
                     moves.Waypoint("from", pitch=self._now_pitch(pitch),
@@ -1574,7 +1737,13 @@ class CameraSession:
                                    duration=hop_s,
                                    easing=moves.DEFAULT_EASING),
                 ])
-                self.runner.start(hop)
+                zoom = shot.sample_zoom(shot.total_duration * (done + i) / (plan.frames - 1))
+                if zoom is not None:
+                    feedback = self._zoom_ready()
+                    hop.waypoints[0].zoom = (feedback['zoom']['value'] - 1) / 11
+                    hop.waypoints[1].zoom = zoom
+                if not self._timelapse_run(hop):
+                    break
                 if not self._wait_for_runner(hop_s + 5.0):
                     raise RuntimeError(f"frame {i + 1}: the head did not arrive")
 
@@ -1584,19 +1753,8 @@ class CameraSession:
                 if self._sleep_or_stop(plan.settle_s):
                     break
 
-                link = self.link
-                if link is not None:
-                    link.send_frame(commands.photo())
-                shot = done + i + 1
-                self.tl_state = dict(self.tl_state, frame=shot)
-                # Written after every frame. A shoot that dies at frame 812 of
-                # 1200 is recoverable; one that dies without a record is a lost
-                # afternoon.
-                try:
-                    timelapse.save_progress(self.state_dir, self.move, plan, shot,
-                                            time.time())
-                except OSError:
-                    log.warning("could not save timelapse progress", exc_info=True)
+                if not self._timelapse_capture(shot, plan, done + i + 1):
+                    break
 
                 if self._sleep_or_stop(plan.expose_s + plan.gap_s):
                     break
@@ -1604,16 +1762,7 @@ class CameraSession:
             log.exception("timelapse failed")
             self.tl_state = dict(self.tl_state, error=f"{type(exc).__name__}: {exc}")
         finally:
-            stick = self.stick
-            if stick is not None:
-                stick.abort()
-            # A finished shoot offering to resume itself is a trap the morning
-            # after; an interrupted one must keep its place.
-            if self.tl_state.get("frame", 0) >= self.tl_state.get("frames", 0):
-                timelapse.clear_progress(self.state_dir)
-            self.tl_state = dict(self.tl_state, running=False)
-            if self.owner == "program":
-                self.owner = "none"
+            self._finish_timelapse()
 
     def _now_pitch(self, fallback: float) -> float:
         att = getattr(self.link, "attitude", None)
@@ -1628,9 +1777,9 @@ class CameraSession:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._tl_stop.is_set():
-                return True
+                return False
             if self.runner is not None and not self.runner.running:
-                return True
+                return not (getattr(self.runner, "fault", "") or self.runner.report.aborted)
             time.sleep(0.02)
         return False
 
@@ -1795,7 +1944,7 @@ class CameraSession:
 
     @_workspace_change
     def set_move(self, data: dict) -> None:
-        if self.runner is not None and self.runner.running or self.preroll_until:
+        if self.runner is not None and self.runner.running or self.preroll_until or self.tl_state["running"]:
             raise RuntimeError("stop the move or countdown before editing its path")
         self.move = moves.Move.from_dict(data)
 
@@ -1814,6 +1963,9 @@ class CameraSession:
             raise RuntimeError("not connected")
         if not self.armed:
             raise RuntimeError("not armed -- arm before playing a move")
+        if self.tl_state["running"]:
+            raise RuntimeError("stop the timelapse before playing another move")
+        self._zoom_path_ready(self.move)
 
         # Somebody will knock the tripod between takes and nobody will admit
         # it. The move then runs perfectly from the wrong place, which looks
@@ -1832,6 +1984,15 @@ class CameraSession:
                     f"the start of this move. Back to one first, or play with "
                     f"force to run it from here.")
 
+    def _zoom_path_ready(self, shot) -> None:
+        zoom = shot.sample_zoom(0)
+        if zoom is None:
+            return
+        feedback = self._zoom_ready()
+        if abs(feedback["zoom"]["value"] - (1 + zoom * 11)) > 0.1:
+            raise RuntimeError(f"set zoom to {1 + zoom * 11:.2f}x before starting this path")
+
+    @_motion_change
     def play(self, force: bool = False) -> None:
         self._play_preflight(force)
         self.owner = "program"
@@ -1859,6 +2020,7 @@ class CameraSession:
     # the gap is the editorial handle. ROLL is one call here: the same
     # preflight as play, then record, then the countdown cue, then the move.
     # Nothing moves until the timer fires, and any disarm cancels it.
+    @_motion_change
     def roll(self, preroll_s: float | None = None, force: bool = False) -> dict:
         self._play_preflight(force)
         seconds = float(self.preroll_s if preroll_s is None else preroll_s)
@@ -1874,12 +2036,18 @@ class CameraSession:
         timer.start()
         return {"preroll": seconds, "at": self.preroll_until}
 
+    @_motion_change
     def _roll_go(self) -> None:
         self._roll_timer = None
         self.preroll_until = 0.0
         # The world may have changed during the count: a STOP, a grab, a
         # dropped link. Re-check rather than trust the timer.
         if not self.armed or self.runner is None or self.clutch.state.engaged:
+            return
+        try:
+            self._play_preflight()
+        except (RuntimeError, ValueError) as exc:
+            self.fault = str(exc)
             return
         self.owner = "program"
         self._start_shot_run()
@@ -1891,6 +2059,7 @@ class CameraSession:
         self._roll_timer = None
         self.preroll_until = 0.0
 
+    @_motion_change
     def play_segment(self, first: int, last: int, force: bool = False) -> dict:
         """Rehearse part of the move.
 
@@ -1909,7 +2078,10 @@ class CameraSession:
             raise RuntimeError("not armed -- arm before rehearsing")
         if self.clutch.state.engaged:
             raise RuntimeError("clutch is held -- release it first")
+        if self.tl_state["running"] or self.preroll_until:
+            raise RuntimeError("stop the timelapse or countdown before rehearsing")
         seg = self.move.segment(first, last)
+        self._zoom_path_ready(seg)
 
         link = self.link
         att = getattr(link, "attitude", None) if link else None
@@ -1947,11 +2119,14 @@ class CameraSession:
         if self.runner is not None:
             self.runner.stop(aborted=True)
 
+    @_motion_change
     def goto(self, index: int, duration: float = 2.5) -> None:
         """Travel to one waypoint from wherever the camera is now."""
         link, _ = self.require()
         if self.runner is None:
             raise RuntimeError("not connected")
+        if self.tl_state["running"] or self.preroll_until:
+            raise RuntimeError("stop the timelapse or countdown before positioning")
         if not (0 <= index < len(self.move.waypoints)):
             raise ValueError(f"no waypoint at index {index}")
         att = link.attitude
@@ -1966,8 +2141,11 @@ class CameraSession:
         ])
         self.runner.start(hop)
 
+    @_motion_change
     def action(self, name: str) -> None:
         link, stick = self.require()
+        if self.tl_state["running"] and name not in ("record_stop", "live_view", "params"):
+            raise RuntimeError("stop the timelapse before another camera action")
         if name == "recenter":
             stick.recenter()
         elif name == "flip":
@@ -2173,9 +2351,9 @@ class Handler(BaseHTTPRequestHandler):
             # Assists and scopes, shared by both pages so the exposure maths
             # cannot drift into two disagreeing copies.
             self._file(WEB_DIR / "monitor.js", "application/javascript; charset=utf-8")
-        elif self.route in ("/session.js", "/director.js", "/copilot.js", "/workspace-layout.js", "/studio-settings.js", "/ui.js", "/vendor/snapgrid.js"):
+        elif self.route in ("/session.js", "/director.js", "/copilot.js", "/workspace-layout.js", "/studio-settings.js", "/ui.js", "/lens-controls.js", "/vendor/snapgrid.js"):
             self._file(WEB_DIR / self.route[1:], "application/javascript; charset=utf-8")
-        elif self.route in ("/director.css", "/copilot.css", "/workspace-layout.css", "/studio-settings.css", "/ui.css"):
+        elif self.route in ("/director.css", "/copilot.css", "/workspace-layout.css", "/studio-settings.css", "/ui.css", "/lens-controls.css"):
             self._file(WEB_DIR / self.route.lstrip("/"), "text/css; charset=utf-8")
         elif self.route == '/api/access':
             self._json({'ok': True, 'identity': self._principal, 'lan_available': bool(self.token)})
@@ -2420,6 +2598,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.session.camera_resolution(str(b.get("resolution", "4K")),
                                                str(b.get("fps", "25")))
                 self._json({"ok": True})
+            elif self.route == "/api/camera/focus-target":
+                b = self._body()
+                self.session.camera_focus_target(b.get("x"), b.get("y"),
+                    b.get("acknowledge_exposure", False))
+                self._json({"ok": True, "reported": False})
             elif self.route == "/api/take":
                 b = self._body()
                 self._json({"ok": True, "take": self.session.log_take(

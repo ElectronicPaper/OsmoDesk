@@ -155,6 +155,24 @@ support, planning-only functions, trusted-LAN scope and the distinction between
 software proof, observed camera behavior and user acceptance. The earlier entries
 above describe their dated local candidates, not the final release delivery state.
 
+## Camera completion follow-up — 2026-09-15
+
+The working update adds fresh per-field camera readback, a shared Lens panel,
+guarded waypoint zoom and finite continuous timelapse through the existing runner.
+Named feedback subscriptions extend the host without changing the mirrored v1
+Palm/Desk contract. Protocol layouts were checked against OpenPocketCine commit
+`9b30b93572797c94db5ad9236fb746410f8d761f` (`Commands.swift`, `CameraStatus.swift`,
+`CameraControl.swift`). The zoom SET is four bytes; offset 14 is incoming status,
+not a command payload offset. Regression coverage protects this distinction.
+
+On the development Pocket 4P, fresh telemetry confirmed AF-S then AF-C, 1.1x zoom
+then 1x, and recording start then stop. A six-second one-degree return path with
+zoom peaked at 0.17 degrees tracking error with no telemetry gaps. A three-frame
+continuous request sequence finished with 0.23-degree peak error and no gaps.
+This does not verify saved still files, optical focus accuracy, manual focus
+distance, long-duration filming, or compatibility with another camera model.
+Refocus A/B was tested offline only because it also changes spot exposure metering.
+
 ## Sources
 
 1. DJI, [Osmo Pocket 4P specifications](https://www.dji.com/jp/osmo-pocket-4p/specs), accessed 2026-09-14. Regional pages redirected inconsistently; the Japanese specification page was readable. No Pocket 3 specification was substituted.

@@ -29,6 +29,7 @@ Nothing here talks to the camera. It plans; the runner executes.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from . import moves
 
@@ -51,10 +52,59 @@ JUDDER_DEG_PER_FRAME = 1.0
 STALL_DEG_PER_FRAME = 0.02
 
 MAX_FRAMES = 10000
+# A stale unattended shoot is recoverable; one longer than a day is almost
+# certainly an accidental request or a plan that cannot be supervised safely.
+MAX_SHOOT_S = 24 * 60 * 60
+# Continuous movement needs a real clock interval.  Faster requests both
+# outrun the shutter/gimbal hand-off and make a zero-length retime possible.
+MIN_CONTINUOUS_INTERVAL_S = 0.2
 
 
 class TimelapseError(ValueError):
     """A plan that cannot be shot."""
+
+
+def _finite_number(value, name: str) -> float:
+    """Strict numeric boundary for operator and persisted plan data."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TimelapseError(f"{name} must be a finite number")
+    value = float(value)
+    if not math.isfinite(value):
+        raise TimelapseError(f"{name} must be a finite number")
+    return value
+
+
+def _canonical_move(move: moves.Move) -> moves.Move:
+    """Clone through the canonical path validator without touching the source."""
+    if not isinstance(move, moves.Move):
+        raise TimelapseError("move must be a Move")
+    try:
+        return moves.Move.from_dict(move.to_dict())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise TimelapseError(f"invalid move: {exc}") from None
+
+
+def _finite_json(value) -> bool:
+    """Whether a decoded progress payload contains only finite JSON values."""
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, (str, int, bool)) or value is None:
+        return True
+    if isinstance(value, list):
+        return all(_finite_json(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _finite_json(item)
+                   for key, item in value.items())
+    return False
+
+
+def _reject_ambiguous_continuous(move: moves.Move) -> None:
+    if move.loop:
+        raise TimelapseError("continuous timelapse refuses looped paths")
+    if move.ping_pong:
+        raise TimelapseError("continuous timelapse refuses ping-pong paths")
+    if move.has_cues:
+        raise TimelapseError("continuous timelapse refuses cue-driven paths")
 
 
 @dataclass(frozen=True)
@@ -158,13 +208,30 @@ def plan_for(move: moves.Move, frames: int,
     """Work out what shooting `move` as `frames` stills actually costs."""
     if mode not in ("sms", "continuous"):
         raise TimelapseError(f"unknown mode {mode!r}")
-    if not (2 <= frames <= MAX_FRAMES):
+    if type(frames) is not int or not (2 <= frames <= MAX_FRAMES):
         raise TimelapseError(f"frames must be between 2 and {MAX_FRAMES}")
+    expose_s = _finite_number(expose_s, "expose time")
+    settle_s = _finite_number(settle_s, "settle time")
+    gap_s = _finite_number(gap_s, "gap time")
+    output_fps = _finite_number(output_fps, "output frame rate")
     if output_fps <= 0:
         raise TimelapseError("output frame rate must be positive")
     for name, v in (("expose", expose_s), ("settle", settle_s), ("gap", gap_s)):
         if v < 0:
             raise TimelapseError(f"{name} time cannot be negative")
+
+    interval = expose_s + gap_s
+    if interval <= 0:
+        raise TimelapseError("frame interval must be positive")
+    if mode == "continuous":
+        if interval < MIN_CONTINUOUS_INTERVAL_S:
+            raise TimelapseError(
+                f"continuous frame interval must be at least "
+                f"{MIN_CONTINUOUS_INTERVAL_S:g} seconds")
+        move = _canonical_move(move)
+        _reject_ambiguous_continuous(move)
+    else:
+        move = _canonical_move(move)
 
     poses = frame_poses(move, frames)
     if len(poses) < 2:
@@ -175,9 +242,60 @@ def plan_for(move: moves.Move, frames: int,
     yaw_span = sum(abs(moves.wrap180(b[1] - a[1]))
                    for a, b in zip(poses, poses[1:]))
 
-    return Plan(frames=frames, settle_s=settle_s, expose_s=expose_s,
+    plan = Plan(frames=frames, settle_s=settle_s, expose_s=expose_s,
                 gap_s=gap_s, output_fps=output_fps, mode=mode,
                 pitch_span=pitch_span, yaw_span=yaw_span)
+    if plan.shoot_s > MAX_SHOOT_S:
+        raise TimelapseError(
+            f"timelapse duration must not exceed {MAX_SHOOT_S / 3600:g} hours")
+    return plan
+
+
+def continuous_plan_move(move: moves.Move, plan: Plan) -> moves.Move:
+    """Return the finite, retimed canonical path for a continuous shoot.
+
+    Frames are exposed at ``i * (expose_s + gap_s)``.  The authored path is
+    scaled into the interval from frame zero through the final exposure; a
+    final interval is then retained as dwell so the runner has an honest
+    finish window.  It deliberately reuses ``Move`` and its sampler: adding a
+    second interpolation engine would make the planned and executed shots
+    disagree.
+    """
+    if not isinstance(plan, Plan):
+        raise TimelapseError("continuous timelapse requires a Plan")
+    if plan.mode != "continuous":
+        raise TimelapseError("continuous timelapse requires a continuous plan")
+    # Revalidate an in-memory Plan: persisted data and callers can construct a
+    # dataclass directly instead of going through plan_for.
+    checked = plan_for(move, plan.frames, expose_s=plan.expose_s,
+                       settle_s=plan.settle_s, gap_s=plan.gap_s,
+                       output_fps=plan.output_fps, mode=plan.mode)
+    source = _canonical_move(move)
+    _reject_ambiguous_continuous(source)
+    interval = checked.expose_s + checked.gap_s
+    traversal_s = (checked.frames - 1) * interval
+    # The final dwell belongs to the final-frame completion window, not path
+    # traversal.  Every earlier leg/dwell keeps its authored proportion.
+    traversal_source_s = source.total_duration - source.waypoints[-1].dwell
+    if not math.isfinite(traversal_source_s) or traversal_source_s <= 0:
+        raise TimelapseError("continuous timelapse needs a finite nonzero path")
+    factor = traversal_s / traversal_source_s
+    if not math.isfinite(factor) or factor <= 0:
+        raise TimelapseError("continuous timelapse retime is impossible")
+    # Move.retimed clamps short legs, which would quietly alter this exact
+    # shutter schedule.  Refuse instead of making a different shot.
+    if any(w.duration * factor < moves.MIN_LEG_S for w in source.waypoints[1:]):
+        raise TimelapseError("continuous frame interval is too short for this path")
+
+    out = _canonical_move(source)
+    for waypoint in out.waypoints[:-1]:
+        waypoint.duration *= factor
+        waypoint.dwell *= factor
+    out.waypoints[-1].duration *= factor
+    # Preserve all authored dwell/flow/zoom timing through traversal, then
+    # reserve precisely one interval at the final frame for completion.
+    out.waypoints[-1].dwell = interval
+    return out
 
 
 def frame_poses(move: moves.Move, frames: int) -> list[tuple[float, float]]:
@@ -248,10 +366,12 @@ def fingerprint(move: moves.Move) -> str:
     a waypoint must. Only the things that change where the head goes are in
     the hash.
     """
+    move = _canonical_move(move)
     body = [
         [round(w.pitch, 3), round(w.yaw, 3), round(w.duration, 4),
          round(w.dwell, 4), w.easing, bool(w.flow),
-         None if w.zoom is None else round(w.zoom, 4)]
+         None if w.zoom is None else round(w.zoom, 4), w.zoom_easing,
+         bool(w.cue)]
         for w in move.waypoints
     ]
     body.append([bool(move.loop), bool(move.ping_pong), bool(move.route_arcs)])
@@ -294,16 +414,47 @@ def load_progress(directory, move: moves.Move | None = None,
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return None
-    if not isinstance(payload, dict) or "frame" not in payload:
+    if (not isinstance(payload, dict) or "frame" not in payload
+            or not _finite_json(payload)):
+        return None
+    try:
+        # These are consumed by resume directly.  Validate the whole boundary
+        # here so a hand-edited or interrupted state file cannot make startup
+        # crash later on a NaN, bool-as-int, or unexpected nested object.
+        frame = payload["frame"]
+        frames = payload["frames"]
+        if (type(frame) is not int or type(frames) is not int
+                or not 0 <= frame <= frames
+                or not 2 <= frames <= MAX_FRAMES):
+            return None
+        if not isinstance(payload.get("fingerprint"), str):
+            return None
+        at = _finite_number(payload.get("at"), "saved time")
+        stored_move = _canonical_move(moves.Move.from_dict(payload.get("move")))
+        plan_data = payload.get("plan")
+        if not isinstance(plan_data, dict):
+            return None
+        stored_plan = plan_for(
+            stored_move, plan_data.get("frames"),
+            expose_s=plan_data.get("expose_s"),
+            settle_s=plan_data.get("settle_s"),
+            gap_s=plan_data.get("gap_s"),
+            output_fps=plan_data.get("output_fps"),
+            mode=plan_data.get("mode"),
+        )
+        if stored_plan.frames != frames:
+            return None
+        if now is not None:
+            now = _finite_number(now, "current time")
+        if move is not None:
+            matches = fingerprint(move) == payload["fingerprint"]
+    except (KeyError, TypeError, ValueError, OverflowError, TimelapseError):
         return None
 
-    payload["stale"] = False
-    if now is not None:
-        payload["stale"] = (now - float(payload.get("at", 0.0))) > STALE_AFTER_S
-    payload["finished"] = payload.get("frame", 0) >= payload.get("frames", 0)
-
+    payload["stale"] = False if now is None else (now - at) > STALE_AFTER_S
+    payload["finished"] = frame >= frames
     if move is not None:
-        payload["matches"] = fingerprint(move) == payload.get("fingerprint")
+        payload["matches"] = matches
     return payload
 
 

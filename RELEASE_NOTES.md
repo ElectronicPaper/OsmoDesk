@@ -1,3 +1,18 @@
+# Camera completion update — working candidate
+
+Fresh camera-reported recording, autofocus, AF target, zoom and color are separate
+from setter requests. All operator views have a shared Lens panel with accessible
+controls and exposure-acknowledged Refocus A/B. These are autofocus targets, not
+manual focus distance or a calibrated rack-focus mechanism.
+
+Waypoint zoom now executes in the canonical runner at no more than 20 Hz, using
+the corrected four-byte SET format (status offset 14 is not a SET offset).
+Continuous timelapse executes a finite retimed path, aborting on missed deadlines,
+STOP, tracking failure, lost standby readback or recovery-write failure. Capture
+counts are requests, not confirmed files; interrupted continuous time cannot be resumed.
+
+The dated preview notes below describe the earlier shipped release.
+
 # Cinema Workspace preview — v0.2.0-preview.1
 
 This is an experimental OsmoDesk milestone, not a stable v1.0 or certification of

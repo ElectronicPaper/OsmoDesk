@@ -1,0 +1,40 @@
+/* Scoped shared lens card: no global page layout or control overrides. */
+.ol-card{--ol-ink:var(--text,#e7eaf0);--ol-muted:var(--muted,#a5adbb);--ol-line:var(--border,#3e4757);--ol-accent:var(--accent,#b8d3f4);box-sizing:border-box;color:var(--ol-ink);background:var(--panel,#1c2230);border:1px solid var(--ol-line);border-radius:14px;padding:16px;width:100%;min-width:0;font:14px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}
+.ol-card *{box-sizing:border-box}
+.ol-card .ol-heading{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.ol-card .ol-heading svg{width:28px;height:28px;fill:none;stroke:var(--ol-accent);stroke-width:1.5;flex:none}
+.ol-card h3{font-size:18px;line-height:1.3;margin:0;font-weight:650}
+.ol-card p{margin:6px 0}
+.ol-card .ol-heading p,.ol-card .ol-muted{color:var(--ol-muted);font-size:12px}
+.ol-card .ol-gate{font-size:12px;padding:8px 10px;background:var(--bg,#141a25);border-radius:8px}
+.ol-card .ol-readings{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+.ol-card .ol-readings span,.ol-card .ol-readings strong{display:block}
+.ol-card .ol-readings span{font-size:12px;color:var(--ol-muted)}
+.ol-card .ol-readings strong{font-size:14px;font-variant-numeric:tabular-nums}
+.ol-card fieldset{min-width:0;border:0;border-top:1px solid var(--ol-line);padding:10px 0;margin:0}
+.ol-card legend{padding:0 8px 0 0;font-weight:650}
+.ol-card .ol-row{display:flex;gap:8px;flex-wrap:wrap}
+.ol-card .ol-row>button,.ol-card .ol-coordinates>label{flex:1 1 90px;min-width:0}
+.ol-card button,.ol-card input[type=number]{font:inherit;color:var(--ol-ink);background:var(--bg,#141a25);border:1px solid var(--ol-line);border-radius:8px;min-height:44px;padding:8px 10px;max-width:100%}
+.ol-card button{cursor:pointer;white-space:normal;line-height:1.3}
+.ol-card button:hover:not(:disabled){border-color:var(--ol-accent)}
+.ol-card button[aria-pressed=true]{border-color:var(--ol-accent);box-shadow:inset 0 0 0 1px var(--ol-accent)}
+.ol-card button:disabled,.ol-card input:disabled{opacity:.5;cursor:not-allowed}
+.ol-card button:focus-visible,.ol-card input:focus-visible,.ol-card summary:focus-visible{outline:2px solid var(--ol-accent);outline-offset:3px}
+.ol-card .ol-zoom-label{display:block}
+.ol-card .ol-zoom-label output{float:right;font-variant-numeric:tabular-nums}
+.ol-card input[type=range]{display:block;width:100%;min-height:44px;accent-color:var(--ol-accent);margin:0}
+.ol-card .ol-refocus{border-top:1px solid var(--ol-line);margin-top:4px}
+.ol-card summary{min-height:44px;cursor:pointer;padding:10px 0;font-weight:650}
+.ol-card summary span{font-size:12px;font-weight:400;color:var(--ol-muted);margin-left:4px}
+.ol-card .ol-refocus-body{display:grid;gap:10px}
+.ol-card .ol-disclosure{border-left:2px solid var(--ol-accent);padding-left:10px;font-size:13px}
+.ol-card .ol-coordinates label{font-size:12px;color:var(--ol-muted)}
+.ol-card input[type=number]{display:block;width:100%;margin-top:4px;font-variant-numeric:tabular-nums}
+.ol-card .ol-ack{display:flex;align-items:center;gap:8px;min-height:44px;font-size:13px;cursor:pointer}
+.ol-card input[type=checkbox]{width:22px;height:22px;flex:none;accent-color:var(--ol-accent);margin:0}
+.ol-card .ol-marks{display:grid;gap:12px}
+.ol-card .ol-marks span{display:block;font-size:12px;margin-bottom:4px;font-variant-numeric:tabular-nums}
+.ol-card .ol-request{border-top:1px solid var(--ol-line);padding-top:10px;font-size:12px;color:var(--ol-muted);margin-top:10px}
+@media(prefers-reduced-motion:reduce){.ol-card *{scroll-behavior:auto}}
+@media(forced-colors:active){.ol-card button[aria-pressed=true]{outline:2px solid Highlight}.ol-card button:disabled{color:GrayText;opacity:1}}

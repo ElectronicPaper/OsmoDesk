@@ -16,8 +16,9 @@ import logging
 import math
 import threading
 import time
+from typing import Callable
 
-from . import commands, moves, response, shaping
+from . import camera, commands, moves, response, shaping
 from .datalink import Datalink
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,9 @@ YAW_SIGN = 1.0
 
 # How far ahead to sample the path when estimating its velocity.
 FF_LOOKAHEAD_S = 0.05
+
+# Pocket 4 Pro's captured zoom-slider cadence. Stick control stays at 40 Hz.
+ZOOM_INTERVAL_S = 1.0 / 20.0
 
 
 def _wrap180(delta: float) -> float:
@@ -397,7 +401,8 @@ class MoveRunner:
     """
 
     def __init__(self, link, stick: GimbalStick, kp: float = 2.0,
-                 limits: moves.SoftLimits | None = None):
+                 limits: moves.SoftLimits | None = None, *,
+                 on_zoom: Callable[[float], None] | None = None):
         self.link = link
         self.stick = stick
         self.kp = kp
@@ -406,6 +411,11 @@ class MoveRunner:
         # Yaw uses the separately measured arc; treating both as pitch would
         # invent a coordinate system and reject most legal pans.
         self.yaw_limits = moves.YAW_LIMITS
+        # The host owns camera capability, color/telemetry gates and dispatch.
+        # Callback must synchronously dispatch or raise; it must not queue work.
+        self.on_zoom = on_zoom
+        self._last_zoom_raw: int | None = None
+        self._last_zoom_at: float | None = None
 
         self.move: moves.Move | None = None
         self.started_at: float | None = None
@@ -434,12 +444,24 @@ class MoveRunner:
     def start(self, move: moves.Move) -> None:
         if len(move.waypoints) < 2:
             raise ValueError("a move needs at least two waypoints")
+        if move.has_zoom:
+            if not callable(self.on_zoom):
+                raise ValueError("waypoint zoom requires an available zoom callback")
+            for waypoint in move.waypoints:
+                if waypoint.zoom is not None:
+                    self._zoom_raw(waypoint.zoom)
+                    moves.get_easing(waypoint.zoom_easing)
         self.stop()
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("previous move is still stopping")
         self.move = move
         self.report = MoveReport()
         self.fault = ""
         self.waiting_cue = None
+        self.elapsed = 0.0
         self._pause_offset = 0.0
+        self._last_zoom_raw = None
+        self._last_zoom_at = None
         self._cue_go.clear()
         self._stop.clear()
         self.running = True
@@ -452,8 +474,10 @@ class MoveRunner:
         self._stop.set()
         self._cue_go.set()          # release a waiting cue so the thread exits
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None
+            if self._thread is not threading.current_thread():
+                self._thread.join(timeout=2.0)
+            if not self._thread.is_alive():
+                self._thread = None
         self.running = False
         self.waiting_cue = None
         self.stick.release()
@@ -503,11 +527,21 @@ class MoveRunner:
 
                 # A programmed target outside either measured arc is corrupt
                 # runtime input, not an invitation to drive into a soft stop.
+                try:
+                    zoom = self._sample_zoom(move, self.elapsed)
+                except (TypeError, ValueError, OverflowError):
+                    self._motion_fault(True, "Invalid waypoint zoom; motion stopped")
+                    break
                 self.clamped = False
                 if not self._drive(tp, ty, vp, vy, report_time=self.elapsed):
                     break
+                zoom_ok, zoom_delivered = self._dispatch_zoom(zoom)
+                if not zoom_ok:
+                    break
 
-                if move.finished(self.elapsed):
+                # Keep the endpoint frozen until its final zoom is dispatched
+                # within the same cadence. No forced extra packet at the tail.
+                if move.finished(self.elapsed) and zoom_delivered:
                     break
         finally:
             self.report.elapsed = self.elapsed
@@ -526,7 +560,15 @@ class MoveRunner:
         self._cue_go.clear()
         paused_at = time.monotonic()
         held = move.sample(cue_time)
+        try:
+            held_zoom = self._sample_zoom(move, cue_time)
+        except (TypeError, ValueError, OverflowError):
+            self.waiting_cue = None
+            return self._motion_fault(True, "Invalid waypoint zoom; motion stopped")
         if held is None or not self._drive(held[0], held[1]):
+            self.waiting_cue = None
+            return False
+        if not self._dispatch_zoom(held_zoom)[0]:
             self.waiting_cue = None
             return False
         while not self._cue_go.wait(0.05):
@@ -537,9 +579,55 @@ class MoveRunner:
             if not self._drive(held[0], held[1]):
                 self.waiting_cue = None
                 return False
+            if not self._dispatch_zoom(held_zoom)[0]:
+                self.waiting_cue = None
+                return False
         self.waiting_cue = None
         self._pause_offset += time.monotonic() - paused_at
         return not self._stop.is_set()
+
+    @staticmethod
+    def _zoom_raw(value: float) -> int:
+        """Validate at the runner boundary, then deduplicate real wire units."""
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not 0.0 <= value <= 1.0 or not math.isfinite(value)):
+            raise ValueError("waypoint zoom must be finite and within 0..1")
+        lo, hi = camera.ZOOM_LENS["1x"], camera.ZOOM_LENS["12x"]
+        return round(lo + value * (hi - lo))
+
+    def _sample_zoom(self, move: moves.Move, t: float) -> float | None:
+        value = move.sample_zoom(t)
+        if value is None and not move.has_zoom:
+            return None
+        self._zoom_raw(value)
+        if not callable(self.on_zoom):
+            raise ValueError("waypoint zoom requires an available zoom callback")
+        return value
+
+    def _dispatch_zoom(self, value: float | None) -> tuple[bool, bool]:
+        """(safe to continue, requested wire position delivered), never queued."""
+        if self._stop.is_set():
+            return False, False
+        if value is None:
+            return True, True
+        raw = self._zoom_raw(value)
+        if raw == self._last_zoom_raw:
+            return True, True
+        now = time.monotonic()
+        if self._last_zoom_at is not None and now - self._last_zoom_at < ZOOM_INTERVAL_S:
+            return True, False
+        try:
+            if self._stop.is_set():
+                return False, False
+            if not callable(self.on_zoom):
+                raise ValueError("zoom callback unavailable")
+            lo, hi = camera.ZOOM_LENS["1x"], camera.ZOOM_LENS["12x"]
+            self.on_zoom((raw - lo) / (hi - lo))
+        except Exception:
+            # Callback/provider details are not exposed through camera status.
+            return self._motion_fault(True, "Waypoint zoom dispatch failed; motion stopped"), False
+        self._last_zoom_raw, self._last_zoom_at = raw, time.monotonic()
+        return not self._stop.is_set(), True
 
     def _drive(self, target_pitch: float, target_yaw: float,
                vel_pitch: float = 0.0, vel_yaw: float = 0.0,
@@ -552,6 +640,8 @@ class MoveRunner:
         velocity forward means the stick is already commanding roughly the
         right rate, and the P term only has to clean up the difference.
         """
+        if self._stop.is_set():
+            return False
         att = getattr(self.link, "attitude", None)
         if att is None:
             return self._motion_fault(have_telemetry=False)
@@ -581,6 +671,8 @@ class MoveRunner:
         # a quantity whose meaning changed across its own range on this camera,
         # so the same gain behaved differently depending on how fast the move
         # already was. The stick applies signs and linearisation.
+        if self._stop.is_set():
+            return False
         self.stick.set_rate(vel_pitch + self.error_pitch * self.kp,
                             vel_yaw + self.error_yaw * self.kp)
         if report_time is not None:

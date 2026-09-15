@@ -456,6 +456,8 @@ a.link{color:var(--live);}
 <script src="/workspace-layout.js"></script>
 <script src="/studio-settings.js"></script>
 <script src="/ui.js"></script>
+<link rel="stylesheet" href="/lens-controls.css">
+<script src="/lens-controls.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const app = $("app");
@@ -737,8 +739,9 @@ document.addEventListener("visibilitychange", () => {
 });
 
 function render(s) {
+  window.dispatchEvent(new CustomEvent('osmo-status',{detail:s}));
   const ready = s.state === "connected" && s.telemetry && s.link_healthy !== false;
-  const confirmed = false; // the camera never reports its tally over any implemented command
+  const confirmed = s.recording?.reported === true;
   const rec = s.recording || {};
 
   // header
@@ -746,10 +749,10 @@ function render(s) {
   recBox.classList.toggle("on", !!rec.on); recBox.classList.toggle("confirmed", confirmed);
   // Matches the wording on the cine monitor: a request was sent, not proof
   // the camera is rolling.
-  $("recWord").textContent = hostUnavailable ? "UNKNOWN" : rec.on ? "REC REQUESTED" : "STBY";
-  $("recWord").title = rec.on
-    ? "request sent -- verify camera, this app cannot confirm recording" : "";
-  if (rec.on && rec.since) $("recTime").textContent = fmt(Date.now()/1000 - rec.since);
+  $("recWord").textContent = hostUnavailable ? "UNKNOWN" : rec.on ? (confirmed ? "REC" : "REC REQUESTED") : "STBY";
+  $("recWord").title = confirmed ? "Fresh camera-reported recording state" : "Recording state unconfirmed";
+  if (rec.on && rec.elapsed_s != null) $("recTime").textContent = fmt(rec.elapsed_s);
+  else if (rec.on && rec.since) $("recTime").textContent = fmt(Date.now()/1000 - rec.since);
   else $("recTime").textContent = "00:00:00";
   if (s.fault) { $("recBox").classList.add("hidden"); } else { $("recBox").classList.remove("hidden"); }
 

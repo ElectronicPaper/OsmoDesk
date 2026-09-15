@@ -78,8 +78,14 @@ silently replayed. This remains a trusted-LAN tool, not an internet-facing multi
 
 Take evidence is attached to the full shot version that actually ran. Returning to P1 or
 rehearsing a segment does not replace that evidence. Manual log entries carry no motion proof.
-Recording is a **request**, not a confirmed camera tally. Waypoint zoom and continuous
-timelapse remain planning-only; continuous execution is refused explicitly.
+Recording commands remain requests; fresh camera telemetry is shown separately as reported tally.
+Waypoint zoom executes through the motion runner with readback/color guards (no D-Log2 zoom).
+Continuous timelapse executes one finite, cue-free path; missed deadlines stop it without
+catch-up bursts. Progress counts capture requests, not verified image files. Interrupted
+continuous sequences must restart; shoot-move-shoot retains explicit recovery.
+The **Lens** button on every operator view opens autofocus, zoom and session-only Refocus A/B.
+Refocus targets also change spot exposure metering and require explicit acknowledgement.
+Manual lens-distance/rack-focus control remains unavailable; autofocus targets are not a substitute.
 Take comparisons report overlap, coverage, gaps and aborted context. Pixel figures are
 angular estimates, not evidence that footage can be composited or that the rig has not moved.
 
@@ -239,7 +245,8 @@ The development Pocket 4P passed BLE pairing/Wi-Fi connection, healthy telemetry
 720p decoding at approximately 30 fps (5,349 frames with no decoder errors), and a
 bounded 0.6-degree pan followed by a stable stop. The operator confirmed that the
 three-second recording request started and stopped on the camera. This observation
-does **not** add a protocol-reported recording tally: the UI still labels it as a request.
+does **not** prove a saved video file. The newer telemetry decoder reports tally separately
+when fresh; requested state is still labelled when camera feedback is unavailable.
 
 Native Windows Credential Manager save/reload, rotation, removal, missing-key
 fail-closed behavior and owned-entry cleanup passed with synthetic values.

@@ -19,6 +19,7 @@ import time
 
 from . import camera, commands, duml, transport
 from .duml import Frame
+from .camera_feedback import CameraFeedback
 
 # The firmware calls the link dead after 2 s of silence; so does this side.
 LINK_SILENT_S = 2.0
@@ -68,6 +69,7 @@ class Datalink:
         # Latest gimbal attitude from the 0x04/0x05 heartbeat.
         self.attitude = None  # commands.GimbalAttitude | None
         self.power = None  # camera.PowerStatus | None
+        self.camera_feedback = CameraFeedback()
         self.gimbal_pitch: float | None = None
         self.gimbal_roll: float | None = None
         self.gimbal_yaw: float | None = None
@@ -137,6 +139,7 @@ class Datalink:
         self.gimbal_pitch = self.gimbal_roll = self.gimbal_yaw = None
         self.last_attitude_at = 0.0
         log.info("datalink closed")
+        self.camera_feedback = CameraFeedback()
 
     def __enter__(self) -> Datalink:
         self.open()
@@ -153,6 +156,7 @@ class Datalink:
         # camera dictates the real command sequence base in its handshake
         # reply, and we adopt it below.
         self.last_rx_at = 0.0
+        self.camera_feedback = CameraFeedback()
         self.session_id = _rand_between(0x1000, 0xFFFE)
         self.base_seq = _rand_between(0x1000, 0xF000) & 0xFFF8
         self.cam_channel = self.base_seq
@@ -213,7 +217,7 @@ class Datalink:
 
     def _subscribe(self) -> None:
         sub_id = commands.FIRST_SUB_ID
-        for key in commands.SUBSCRIPTION_KEYS:
+        for key in (*commands.SUBSCRIPTION_KEYS, *commands.CAMERA_FEEDBACK_KEYS):
             self.send_frame(commands.subscribe(key, sub_id, self._next_duml_seq()))
             sub_id += 1
         self.send_ack()
@@ -353,6 +357,7 @@ class Datalink:
                 self.ack_windows.acked_data = seq
 
     def _handle(self, frame: Frame) -> None:
+        self.camera_feedback.note(*frame.opcode, frame.payload)
         if frame.opcode == (0x04, 0x05):
             att = commands.parse_gimbal_attitude(frame.payload)
             if att is not None:

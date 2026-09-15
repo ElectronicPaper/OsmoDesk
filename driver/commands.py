@@ -23,6 +23,8 @@ SUBSCRIPTION_KEYS = [
     "cam_video_param_v2",
     "cam_record_time",
 ]
+# Optional host readback; keep the mirrored Palm/Desk v1 baseline unchanged.
+CAMERA_FEEDBACK_KEYS = ("cam_lens_state", "cam_image_effect")
 FIRST_SUB_ID = 0x69DF
 
 

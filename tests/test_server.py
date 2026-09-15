@@ -38,7 +38,7 @@ def fake_runner(running=False, **over):
     from driver.gimbal import MoveReport
     base = dict(running=running, start=lambda m: None, stop=lambda **k: None,
                 elapsed=0.0, progress=0.0, error_pitch=0.0, error_yaw=0.0,
-                clamped=False, waiting_cue=None, report=MoveReport())
+                clamped=False, waiting_cue=None, report=MoveReport(), fault='')
     base.update(over)
     return SimpleNamespace(**base)
 
@@ -304,6 +304,12 @@ class TestCameraDispatch(unittest.TestCase):
     def setUp(self):
         self.s = server.CameraSession(make_args())
         self.s.link, self.s.stick = FakeLink(), FakeStick()
+        from driver.camera_feedback import CameraFeedback
+        from tests.test_camera_feedback import subscription
+        import struct
+        self.s.link.camera_feedback = CameraFeedback()
+        self.s.link.camera_feedback.note(0, 0x99, subscription('cam_lens_state', bytes(14) + struct.pack('<H', 217)))
+        self.s.link.camera_feedback.note(0, 0x99, subscription('cam_image_effect', b'\0\0\x3f'))
 
     def test_each_setting_emits_its_opcode(self):
         for what, value, opcode in (
@@ -1895,12 +1901,17 @@ class TestTimelapseResume(unittest.TestCase):
         from driver import limits
         s = server.CameraSession(make_args())
         s.link, s.stick, s.state = FakeLink(), FakeStick(), "connected"
+        from driver.camera_feedback import CameraFeedback
+        s.link.healthy = True
+        s.link.camera_feedback = CameraFeedback()
+        s.link.camera_feedback.note(2, 0x80, bytes(31))
         s.runner = fake_runner()
         s.armed = True
         p = moves.wrap180(limits.PITCH_ARC.low + limits.PITCH_ARC.usable * .5)
         s.move = moves.Move(waypoints=[
             moves.Waypoint("a", p, 0.0, duration=2.0),
             moves.Waypoint("b", p, 30.0, duration=20.0)])
+        self._park_at(s, p, 0.0)
         return s
 
     def _park_at(self, s, pitch, yaw):
@@ -1982,13 +1993,14 @@ class TestTimelapseResume(unittest.TestCase):
         from driver import timelapse as tl
         s = self._ready()
         plan = tl.plan_for(s.move, frames=2, settle_s=0.0, expose_s=0.0,
-                           gap_s=0.0)
+                           gap_s=0.01)
         tl.save_progress(server.MOVES_DIR, s.move, plan, 1, time.time())
         self.assertIsNotNone(tl.load_progress(server.MOVES_DIR))
 
         poses = tl.frame_poses(s.move, 2)
         s.tl_state = {"running": True, "frame": 0, "frames": 2,
                       "error": None, "plan": plan.to_dict()}
+        s.owner = 'program'
         s._timelapse_worker(poses, plan, done=0)
 
         self.assertEqual(s.tl_state["frame"], 2)
@@ -2000,7 +2012,7 @@ class TestTimelapseResume(unittest.TestCase):
         from driver import timelapse as tl
         s = self._ready()
         plan = tl.plan_for(s.move, frames=6, settle_s=0.0, expose_s=0.0,
-                           gap_s=0.0)
+                           gap_s=0.01)
         poses = tl.frame_poses(s.move, 6)
         s.tl_state = {"running": True, "frame": 0, "frames": 6,
                       "error": None, "plan": plan.to_dict()}

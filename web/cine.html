@@ -529,6 +529,8 @@ a.back{position:absolute;left:50%;bottom:2px;transform:translateX(-50%);z-index:
 <link rel="stylesheet" href="/studio-settings.css">
 <script src="/studio-settings.js"></script>
 <script src="/ui.js"></script>
+<link rel="stylesheet" href="/lens-controls.css">
+<script src="/lens-controls.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -1016,6 +1018,7 @@ async function poll() {
     return;
   }
   lastOkAt = Date.now();
+  window.dispatchEvent(new CustomEvent('osmo-status',{detail:s}));
   hostUnavailable = false;
   tlBand(s.timelapse);
   connected = s.state === "connected" && s.link_healthy !== false;
@@ -1059,7 +1062,9 @@ async function poll() {
   setField("fShut", sh.speed_label ?? null);
   setField("fMode", cam.manual == null ? null : (cam.manual ? "Manual" : "Auto"));
   setField("fWb", cam.wb ?? null);
-  setField("fFocus", cam.focus_continuous == null ? null : (cam.focus_continuous ? "AF-C" : "AF-S"));
+  const focus=s.camera_feedback?.focus_mode;
+  setField("fFocus", focus?.reported ? (focus.value==='continuous'?'AF-C':'AF-S') : null);
+  $("fFocus_w").title=focus?.reported?'Camera-reported autofocus mode':'Autofocus mode unknown or stale';
 
   // The angle rests on a frame rate nothing reports back, so when the rate is
   // only assumed the label is marked with a question mark rather than the

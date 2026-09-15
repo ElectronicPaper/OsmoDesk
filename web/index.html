@@ -574,7 +574,7 @@
         <p class="note">These controls move the gimbal. Rehearsal does not replace the last full-shot take.</p>
       </details>
       <p class="note">Stop motion parks the gimbal. Use Stop recording separately, then log the take in Review.</p>
-      <details class="advanced"><summary>Run motion timelapse</summary><p class="note">Set timing in Compose's timelapse planner first. Only shoot-move-shoot can run.</p><div class="row" id="lapseRunControls"></div></details>
+      <details class="advanced"><summary>Run motion timelapse</summary><p class="note">Set timing in Compose first. Shoot-move-shoot stops for each capture; continuous follows one finite path. Progress counts requests, not verified files.</p><div class="row" id="lapseRunControls"></div></details>
     </div>
     <!-- ============ left: link + live ============ -->
     <div class="col">
@@ -815,7 +815,7 @@ knocked tripod.">Re-reference here</button>
               <option>23.976</option><option>24</option>
               <option selected>25</option><option>30</option>
               <option>50</option><option>60</option></select>fps</label>
-            <label class="f">expose <input type="number" id="tlExpose"
+            <label class="f" title="Capture wait budget; does not set camera shutter speed">capture wait <input type="number" id="tlExpose"
               step="0.05" min="0" value="0.5">s</label>
             <label class="f">settle <input type="number" id="tlSettle"
               step="0.05" min="0" value="0.35">s</label>
@@ -827,9 +827,9 @@ knocked tripod.">Re-reference here</button>
             </select></label>
           </div>
           <div class="tl-sum" id="tlSum">Cost it before you commit an afternoon.</div>
-          <div class="tl-warn" id="tlContNote" hidden>Continuous timelapse is
-            cost/planning only on this rig — the host will not run it. Cost it
-            here, then switch to shoot-move-shoot to actually run the shoot.</div>
+          <div class="tl-warn" id="tlContNote" hidden>Continuous keeps the head moving while requesting stills.
+            Return to P1 first. Use one finite path without cue holds; a missed exposure deadline stops the sequence.
+            Capture wait does not set shutter speed. Progress counts requests, not verified files. Interrupted continuous sequences must restart.</div>
           <div id="tlResume"></div>
           <div id="tlWarn"></div>
           <div class="tl-bar" id="tlBar"><i id="lapseFill"></i></div>
@@ -962,6 +962,8 @@ and every result says so.">FOV&deg;<input type="text" id="suFov"
 <script src="/workspace-layout.js"></script>
 <script src="/studio-settings.js"></script>
 <script src="/ui.js"></script>
+<link rel="stylesheet" href="/lens-controls.css">
+<script src="/lens-controls.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let connected = false, running = false, recording = false;
@@ -1158,11 +1160,10 @@ through at speed, so the move does not stutter at every node.">${w.flow ? "FLOW"
                  title="A move has to start and end at rest to be repeatable.">STOP</span>`}
         </div>
         <div class="zoomrow ${w.zoom == null ? 'unset' : ''}">
-          <label class="f">zoom (planned only)<input class="zoomv" type="number" step="0.05"
+          <label class="f">zoom (0 = 1×, 1 = 12×)<input class="zoomv" type="number" step="0.05"
             min="0" max="1" placeholder="--" value="${w.zoom == null ? '' : w.zoom}"
             data-i="${i}" data-k="zoom"
-            title="Recorded on the node and exported with the shot, but not
-driven during playback yet. Blank leaves the lens alone at this node."></label>
+            title="Executed alongside motion when fresh lens readback permits it. Set the starting zoom first using Lens. Blank leaves this node's zoom unspecified."></label>
           <select data-i="${i}" data-k="zoom_easing"></select>
         </div>
       </div>
@@ -1386,6 +1387,7 @@ async function poll() {
     window.director?.invalidate();
   }
   lastStatus = s;
+  window.dispatchEvent(new CustomEvent('osmo-status',{detail:s}));
   lastPollOk = Date.now();
   markHostLoss(false);
   connected = s.state === "connected" && s.link_healthy !== false;
@@ -1797,13 +1799,12 @@ function tlShowPlan(plan) {
     el.textContent = w;
     box.appendChild(el);
   }
-  $("tlStart").disabled = !connected || !armed || running ||
-    $("tlMode").value === "continuous";
+  $("tlStart").disabled = !connected || !armed || running;
 }
 
 $("tlMode").onchange = () => {
   const cont = $("tlMode").value === "continuous";
-  $("tlStart").disabled = $("tlStart").disabled || cont;
+  $("tlStart").disabled = !connected || !armed || running;
   $("tlContNote").hidden = !cont;
 };
 
@@ -1865,13 +1866,12 @@ function tlProgress(t) {
   const bar = $("tlBar");
   bar.classList.toggle("on", !!t.running);
   $("tlStop").disabled = !t.running;
-  $("tlStart").disabled = t.running || !connected || !armed ||
-    $("tlMode").value === "continuous";
+  $("tlStart").disabled = t.running || !connected || !armed || running;
   if (t.frames) {
     $("lapseFill").style.width = (100 * t.frame / t.frames).toFixed(1) + "%";
   }
   if (t.running) {
-    $("tlSum").innerHTML = `shooting frame <b>${t.frame}</b> of ` +
+    $("tlSum").innerHTML = `capture requests <b>${t.frame}</b> of ` +
                            `<b>${t.frames}</b>`;
   }
   // An error from a run that has already ended still has to be seen: the whole
