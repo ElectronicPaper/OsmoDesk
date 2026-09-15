@@ -195,8 +195,9 @@ and sets both focus and metering regions. No confirmed previous-metering GET or
 restoration SET is available. Therefore OsmoDesk does not probe new lens opcodes,
 promise automatic metering restoration, or label autofocus A/B as rack-focus.
 The Lens disclosure now says metering must be reviewed/restored on-camera or in
-Mimo. Optical A/B acceptance requires an operator-observed test with that recovery
-path; it remains unverified, rather than being inferred from acknowledgments.
+Mimo. At this checkpoint the optical result was unverified; the later physical
+check below establishes a bounded AF-S result, not metering restoration or
+general-purpose optical acceptance.
 
 The subsequent Refocus reliability closure preserves the captured four-command
 burst and correlates every acknowledgment before returning success. One shared
@@ -210,6 +211,32 @@ three operator pages at 320/390/768/1440 px: 12 layouts, no Lens overflow, and
 44 px minimum buttons. An initial reused-tab load lost three script responses;
 reload and the final fresh-context cases loaded without script or network errors.
 This browser evidence is not physical autofocus or exposure-restoration proof.
+
+### Physical Refocus A/B follow-up — 2026-09-15
+
+Using the deployed `6b0c630` candidate and its sole camera connection, the
+development Pocket 4P reported healthy telemetry and live preview while charging.
+Two targets in AF-C each returned four acknowledgments, but the preview did not
+show a clear near/far focus change. After explicitly selecting AF-S, the real Lens
+UI saved A/B and recalled A, B, A: a nearby printed label became sharp, then a
+more distant box became sharp while the label blurred, then the label became
+sharp again. Three private preview frames preserve this observation; they are
+ignored local evidence, not public repository images or saved camera footage.
+
+The three AF-S UI requests received four acknowledgments in 94/66/76 ms; first
+matching polled target observations arrived at 359/588/341 ms. Those are host
+request/readback timings, not focus-settle or cinematic pull durations. Across
+both modes, requested targets `(0.445, 0.640)` and `(0.310, 0.655)` were reported
+within 0.0000065 per axis; this measured camera canonicalization is larger than
+float32 encoding error alone. Every sampled state remained healthy, disarmed,
+unowned and not recording, with unchanged measured pan/tilt.
+
+The original centre target was restored through another four-ACK request, and
+fresh telemetry confirmed original AF-C, 1x zoom, HDR, Video and recording off.
+Restoring the target does not restore the previous AE metering mode. That manual
+camera/Mimo check remains outstanding; manual distance control and repeatable
+focus-pull timing remain unsupported. This closes only the basic AF-S A/B optical
+check on this device and scene, not professional-focus or user acceptance.
 
 Sources: [DJI Pocket 4P specifications](https://store.dji.com/uk/product/osmo-pocket-4p),
 [DJI focus-mode help](https://repair.dji.com/help/content?customId=01700009262&lang=en&paperDocType=ARTICLE&re=US&spaceId=17),

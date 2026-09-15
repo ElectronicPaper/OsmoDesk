@@ -96,6 +96,8 @@ Refocus targets also change spot exposure metering and require explicit acknowle
 The complete four-command burst has one three-second acknowledgment deadline;
 STOP cancels the wait, and a partial failure never triggers an automatic retry.
 The Lens panel distinguishes all four command acknowledgments from optical sharpness.
+For deliberate A/B recalls, use AF-S: our Pocket 4P demonstrated a visible
+near/far/near focus change in AF-S, but not in the same AF-C test setup.
 Even a failed request may already have changed metering.
 The previous metering mode cannot be read or restored by OsmoDesk; review and
 restore it on the camera or in DJI Mimo. Refocus A/B is not a reversible focus-only command.

@@ -61,7 +61,14 @@ controls and no JavaScript errors. These are bounded checks, not certification.
 Manual focus-distance/rack-focus remains unsupported by the confirmed protocol.
 Refocus A/B also changes spot exposure metering; OsmoDesk cannot read or restore
 the previous metering mode. The UI now explicitly directs the operator to review
-and restore metering on-camera or in Mimo. Its optical result remains unverified.
+and restore metering on-camera or in Mimo. A later physical check on the development
+Pocket 4P verified visible near/far/near focus changes through the real Lens A/B
+buttons in AF-S. All three recalls received four command acknowledgments; fresh
+target readback followed. The same targets in AF-C did not show a clear optical
+shift in this setup. AF-C and the original centre target were restored afterward;
+the gimbal remained stationary and recording stayed off. This bounded live-preview
+check does not prove calibrated focus distance, controlled pull speed, autofocus
+reliability in other scenes, or restoration of the previous metering mode.
 
 The dated preview notes below describe the earlier shipped release. Its tally,
 waypoint-zoom and continuous-execution limitations are superseded by this update;
