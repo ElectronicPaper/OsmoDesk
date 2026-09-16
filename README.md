@@ -161,6 +161,21 @@ physical guarantee; real tracking, smoothness, camera support and footage need r
 
 ## Optional AI Shot Copilot
 
+AI acts like a DoP (Director of Photography) assistant for the timing and rhythm
+of shots you've already framed. In **Director → Shot Copilot**, try:
+
+> “Start slowly, build anticipation before P2, then hold the final product shot long enough for an edit.”
+
+It proposes two alternative treatments by adjusting:
+
+- Travel time between positions.
+- How long each position holds.
+- Easing: how movement accelerates and decelerates.
+- Optional position names.
+
+This makes OsmoDesk's motion-planning features easier to use: describe the feel
+you want, compare the suggestions, and rehearse before applying one to your draft.
+
 AI is an addition to Director, not a camera operator. It can propose point names,
 travel time, fixed holds and easing for **2–24 existing positions**. It cannot add
 framing points, change angles/zoom/cues/rig setup, connect, arm, move or record.
