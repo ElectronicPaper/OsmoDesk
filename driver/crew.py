@@ -12,6 +12,7 @@ EDITOR_POSTS = frozenset({
     '/api/slate', '/api/take', '/api/take/circle', '/api/director/preview',
     '/api/takes/compare', '/api/timelapse/plan', '/api/move/export',
     '/api/editorial/export',
+    '/api/spatial/preview', '/api/spatial/settle', '/api/move/curves/preview',
 })
 HOST_ROUTES = frozenset({'/api/settings/ai', '/api/crew', '/api/crew/revoke',
                           '/api/workspace/recovery'})

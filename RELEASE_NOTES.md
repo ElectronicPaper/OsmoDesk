@@ -1,3 +1,30 @@
+# Spatial Rehearsal and axis curves — 2026-09-16
+
+Director now includes opt-in, locally bundled 3D rehearsal: private location
+references, panorama import, frame/pointing/A-B views, reveal marks, delivery
+crops, take ghosts, timing recipes and offline storyboard export. This remains
+rotation-only planning, not a calibrated digital twin or autonomous capture.
+
+Each incoming transition can use separate pan and tilt Bezier curves. Axes can
+be independent or linked through planned-progress curves in either direction.
+The editor supports touch/pointer, keyboard and numeric handles, planned position,
+speed and acceleration graphs, explicit Apply/Discard, stale-draft guards and
+deliberate conversion from Flow. All previews and execution use one path model.
+
+The candidate passed 1,406 Python tests, pure frontend checks and isolated Chrome
+browser gates. On the development Pocket 4P, all five small-motion curve modes
+and their five return legs passed: 0.30-degree peak reported tracking error,
+0.20-degree maximum settled endpoint error, no telemetry gaps or travel-limit
+hits. The original draft and speed setting were restored, recording stayed off,
+and the rig was stopped/disarmed. No exposure/focus changes were made.
+
+These bounded one-degree checks are not recorded-footage smoothness or motor
+acceleration certification. Linked modes use planned progress, not measured
+motor-to-motor coupling. Pocket 3/4 compatibility remains untested.
+See [the development handoff](docs/DEVELOPMENT-HANDOFF.md) for the code map,
+verification commands and remaining boundaries. This is still an experimental
+preview; no stable release or new version tag is declared here.
+
 # Camera reliability update — 2026-09-15
 
 Fresh camera-reported recording, autofocus, AF target, zoom and color are separate

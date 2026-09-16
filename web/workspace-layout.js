@@ -107,9 +107,12 @@
       return true;
     }
     function ensureContentHeight(entry, panel) {
+      // Auto-height tools may change tabs. Measure content, not last tab's
+      // imposed minimum, while ordinary resizable panels keep their height.
+      if(panel.fitContent) panel.element.style.minHeight='0';
       var needed = panel.element.scrollHeight || 0;
       var minimum = Math.max(entry.minH, Math.ceil((needed + GAP) / (ROW + GAP)));
-      if (entry.h < minimum) entry.h = minimum;
+      if (panel.fitContent || entry.h < minimum) entry.h = minimum;
     }
     function render() {
       if (!active || !root.clientWidth || !hasCore) return;

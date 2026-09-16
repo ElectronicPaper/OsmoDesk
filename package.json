@@ -2,6 +2,10 @@
   "name": "osmodesk-workspace-assets",
   "private": true,
   "version": "0.1.0",
-  "scripts": {"build:layout": "esbuild web/snapgrid-entry.js --bundle --minify --format=iife --global-name=OsmoSnapgrid --outfile=web/vendor/snapgrid.js --legal-comments=eof"},
-  "devDependencies": {"@snapgridjs/core": "0.10.0", "esbuild": "0.25.12"}
+  "scripts": {
+    "build:layout": "esbuild web/snapgrid-entry.js --bundle --minify --format=iife --global-name=OsmoSnapgrid --outfile=web/vendor/snapgrid.js --legal-comments=eof",
+    "build:spatial": "esbuild web/spatial-view-entry.js --bundle --minify --format=iife --outfile=web/vendor/spatial-view.js --legal-comments=eof",
+    "test:spatial": "node tests/test_spatial_core.mjs && node tests/test_spatial_renderer.mjs"
+  },
+  "devDependencies": {"@snapgridjs/core": "0.10.0", "esbuild": "0.25.12", "three": "0.186.0"}
 }

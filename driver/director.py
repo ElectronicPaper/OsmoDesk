@@ -251,6 +251,7 @@ def preview(move: moves.Move, max_dps: float = response.MAX_DPS,
     """
     if not isinstance(move, moves.Move):
         raise ValueError("move must be a Move")
+    move.validate_axis_curves()
     if len(move.waypoints) > MAX_WAYPOINTS:
         raise ValueError(f"Director supports at most {MAX_WAYPOINTS} waypoints")
     try:

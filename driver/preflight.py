@@ -249,6 +249,11 @@ def check(move: moves.Move,
             f"move has {len(move.waypoints)} waypoints; offline preflight "
             f"supports at most {MAX_WAYPOINTS}")
 
+    try:
+        move.validate_axis_curves()
+    except (ValueError, TypeError) as exc:
+        return _assessment_failure(str(exc))
+
     total = move.total_duration
     if not math.isfinite(total):
         return _assessment_failure("move duration is not finite")
@@ -372,6 +377,25 @@ def check(move: moves.Move,
                 detail=(f"{axis} never exceeds {peak:.2f} deg/s, below the "
                         f"{min_dps:.2f} dead band -- it will not move at all"),
             ))
+
+    # Narrow Bezier peaks can fall between every fixed sample. Bound authored
+    # profiles analytically; linked profiles use the conservative product bound.
+    # This is a planning cap, not a claim about measured motor acceleration.
+    cursor = move.waypoints[0].dwell if move.waypoints else 0.0
+    for i, (start, end) in enumerate(move.legs):
+        if end.has_axis_curves:
+            bounds = move.axis_rate_bounds(i)
+            for axis, bound in zip(("pitch", "yaw"), bounds):
+                delta = moves.arc_delta(move._arc(axis), getattr(start, axis), getattr(end, axis))
+                required = abs(delta) * bound / end.duration
+                if required > max_dps * (1 + 1e-9):
+                    findings.append(Finding(
+                        "too fast", axis, cursor, cursor+end.duration,
+                        required, cursor, max_dps,
+                        f"{axis} curve speed bound is {required:.2f} deg/s, above "
+                        f"the {max_dps:.2f} cap; lengthen this transition. "
+                        "Linked-axis bounds are conservative."))
+        cursor += end.duration + end.dwell
 
     # Worst first, and travel before speed: an axis on a stop is a ruined take,
     # a slightly late one is a fixable take.
