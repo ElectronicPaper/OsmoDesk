@@ -8,6 +8,7 @@ with access to the camera network. This is a browser-based controller, not a pac
 
 - Shot Studio: Compose, Director, Shoot, Review and Rig workspaces, with offline position editing and a non-actuating path preview.
 - Director rehearsal: framing beats, cue-aware playback and checked timing proposals with explicit Apply and Restore.
+- Spatial Rehearsal: local location references, 360° panorama import, 3D pointing/frame views, reveal marks, A/B timing, delivery-crop checks, take ghosts, reusable rhythms and private storyboard export.
 - Optional AI Shot Copilot: a creative brief becomes two locally checked timing treatments for existing framing points, with data disclosure, preview, explicit apply and restore.
 - Shared-tab draft conflict protection and short-lived, ordered browser motion holds; STOP requires release before the same held gesture can resume.
 - Restart-safe draft, slate and take journal; no camera connection or motion authority is restored automatically.
@@ -34,6 +35,54 @@ the serial driver remains here only as an optional integration adapter.
 movement. [Actual camera-free Director capture](docs/images/studio-director-demo-20260915.png).
 Both setup scenes are AI-generated from real interface references; they are not
 physical test photographs. The captures use a synthetic three-position draft.
+
+### Spatial Rehearsal
+
+In **Director**, choose **Load current shot**, then **Enable 3D**. Everything in
+this panel is planning-only. Frame, pointing-sphere Overview and A/B Compare
+share the existing motion engine's sampled path; the 2D view remains available
+without WebGL. Imported stills can be attached to framing points, or a 2:1
+equirectangular panorama can cover the surroundings. Align references manually;
+blank directions have no imagery. “Attach camera preview” only reads an already
+running, fresh preview—it never connects, moves or takes a photograph.
+
+- **Location:** save/open/delete browser-local reference sets; export/import JSON
+  to move between browsers. No reference image is sent to AI or stored on the host.
+- **Framing:** mark static subjects and unwanted objects, set earliest reveal
+  times and desired holds, and preview a reveal treatment at an existing point.
+  Choose a capture ratio, centred delivery crop and per-edge subject margin.
+- **Motion feel:** compare timing/easing treatments, then explicitly apply to
+  the draft or restore it. Both A and B pause at operator cues.
+- **Take ghost:** overlay a recorded angular trace with gaps preserved. Settling
+  describes reported angular quiet in nominal program time, not optical stability.
+  A longer-hold proposal is available only for the exact recorded draft. Loop and
+  ping-pong settling are refused without recorded cycle/beat timing.
+- **Recipes:** transfer names, travel times, holds and easing to the same number
+  of existing points while keeping their angles, zoom, cues and rig metadata.
+- **Share:** export a scriptless, offline HTML storyboard. Images are opt-in;
+  at most 24 rendered reference frames are included. Export location JSON deliberately:
+  it contains the private reference images. Browser storage is not a backup.
+
+This is **rotation-only rehearsal**, not a measured digital twin. Field of view
+is assumed; zoom, roll, parallax, camera translation and moving subjects are not
+simulated. Framing results are sampled estimates, not physical safety guarantees.
+Reference stills and camera attitude are not synchronised. Automatic panorama
+capture/stitching, autonomous tracking and calibrated focus pulls are not included.
+
+The pinned Three.js module is bundled locally, loaded on demand, and makes no
+CDN requests. Rebuild it with `npm ci` then `npm run build:spatial`. Run the pure
+frontend checks with `npm run test:spatial`; the normal Python test command also
+runs the dependency-free core check when Node is installed. The optional browser
+gate, `node tests/test_spatial_browser.mjs`, needs Playwright/Chrome,
+`OSMO_PYTHON` pointing to the project Python and `OSMO_SPATIAL_TEST_OUTPUT`
+pointing to a disposable screenshot directory. It launches an ephemeral loopback
+fixture with camera methods blocked. `OSMO_PLAYWRIGHT_MODULE` may identify an
+already-installed Playwright module; no tooling is installed by the test.
+The axis-editor browser gate, `node tests/test_axis_curves_browser.mjs`, uses
+the same Python, output-directory and Playwright settings and always starts its
+own camera-blocked fixture. Playwright and Chrome are optional external test
+prerequisites, not host runtime dependencies. See the
+[development handoff](docs/DEVELOPMENT-HANDOFF.md) for resume and verification.
 
 ## A look at the setup
 
@@ -159,6 +208,34 @@ canonical motion engine, include fixed holds and round trips, and exclude human 
 Travel violations cannot be repaired with timing alone. A passing sampled check is not a
 physical guarantee; real tracking, smoothness, camera support and footage need rig verification.
 
+## Axis motion curves
+
+Open **Compose → Curves** on a destination position, or **Director → Axis curves**.
+Each incoming transition has separate **Pan** and **Tilt** Bézier handles. Drag
+the handles, use arrow keys (Shift for finer steps), enter percentages, or choose
+Soft / Early / Late presets. Travel time sets the transition's overall duration.
+The host-generated graph shows planned position, speed and acceleration.
+
+- **Independent:** each axis follows its own curve over time.
+- **Pan leads / Tilt leads:** the follower's curve maps the leader's planned
+  progress to its own progress. This can delay, accelerate or soften one axis
+  relative to the other. It is not live motor-to-motor feedback.
+- **Inherit:** use the existing easing for an independent axis or leader;
+  use 1:1 progress for a linked follower. A stationary axis cannot lead.
+
+Preview is offline. **Apply to draft** saves curves without moving the camera;
+saved shots, rehearsal, 3D views, retiming and playback share the same path model.
+Discard keeps the original draft. Existing Flow moves are preserved: switching
+to manual curves explicitly disables Flow throughout the candidate when applied.
+Manual handles and automatic pass-through Flow are separate authoring modes.
+
+Curves cannot overshoot their endpoints. Preflight checks curve speed bounds
+(conservative for linked axes); it can ask for a longer transition. Nonzero
+endpoint speed is flagged because holds or neighbouring curves can create a
+velocity discontinuity. Acceleration is a planned derivative, not a calibrated
+motor limit or a guarantee of physical smoothness. Roll remains camera-managed;
+this editor controls the existing supported pan and tilt axes.
+
 ## Optional AI Shot Copilot
 
 AI acts like a DoP (Director of Photography) assistant for the timing and rhythm
@@ -175,6 +252,8 @@ It proposes two alternative treatments by adjusting:
 
 This makes OsmoDesk's motion-planning features easier to use: describe the feel
 you want, compare the suggestions, and rehearse before applying one to your draft.
+Custom axis curves and links are preserved; easing suggestions affect only
+axes that still inherit easing. Retiming still changes every axis's speed.
 
 AI is an addition to Director, not a camera operator. It can propose point names,
 travel time, fixed holds and easing for **2–24 existing positions**. It cannot add

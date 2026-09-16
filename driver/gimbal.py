@@ -442,6 +442,7 @@ class MoveRunner:
         return min(1.0, self.elapsed / self.move.cycle_duration)
 
     def start(self, move: moves.Move) -> None:
+        move.validate_axis_curves()
         if len(move.waypoints) < 2:
             raise ValueError("a move needs at least two waypoints")
         if move.has_zoom:

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field, asdict
+from . import curves
 
 # --- angles -----------------------------------------------------------------
 
@@ -378,8 +379,22 @@ class Waypoint:
     can shoot drama and one that can only shoot tabletop.
     """
 
+    pitch_curve: list[float] | None = None
+    yaw_curve: list[float] | None = None
+    axis_link: str = "independent"
+
+    @property
+    def has_axis_curves(self) -> bool:
+        return self.pitch_curve is not None or self.yaw_curve is not None or self.axis_link != "independent"
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        result = asdict(self)
+        for key in ("pitch_curve", "yaw_curve"):
+            if result[key] is None:
+                del result[key]
+        if self.axis_link == "independent":
+            del result["axis_link"]
+        return result
 
     @staticmethod
     def from_dict(d: dict) -> "Waypoint":
@@ -389,6 +404,9 @@ class Waypoint:
         zoom_easing = str(d.get("zoom_easing", DEFAULT_EASING))
         get_easing(easing)
         get_easing(zoom_easing)
+        axis_link = d.get("axis_link", "independent")
+        if axis_link not in ("independent", "pan_leads", "tilt_leads"):
+            raise ValueError("axis_link must be independent, pan_leads, or tilt_leads")
         return Waypoint(
             name=str(d.get("name", "")),
             pitch=wrap180(_number(d["pitch"], "pitch")),
@@ -400,6 +418,9 @@ class Waypoint:
             zoom_easing=zoom_easing,
             flow=_bool_field(d, "flow", False),
             cue=_bool_field(d, "cue", False),
+            pitch_curve=curves.validate_curve(d.get("pitch_curve")),
+            yaw_curve=curves.validate_curve(d.get("yaw_curve")),
+            axis_link=axis_link,
         )
 
 
@@ -579,6 +600,12 @@ class Move:
         for i, (start, end) in enumerate(self.legs):
             if t < cursor + end.duration:
                 s = (t - cursor) / end.duration if end.duration > 0 else 1.0
+                if end.has_axis_curves:
+                    if flowing:
+                        raise ValueError("Manual axis curves cannot be combined with Flow; choose one motion mode")
+                    p, y = self.axis_progress(i, s)
+                    return (start.pitch + arc_delta(self._arc("pitch"), start.pitch, end.pitch)*p[0],
+                            start.yaw + arc_delta(self._arc("yaw"), start.yaw, end.yaw)*y[0])
                 if flowing:
                     # Returned unwrapped, like lerp_angle above: a move that
                     # crosses the +/-180 seam yields 190 rather than -170, and
@@ -614,6 +641,48 @@ class Move:
     @property
     def has_zoom(self) -> bool:
         return any(w.zoom is not None for w in self.waypoints)
+
+    def validate_axis_curves(self):
+        """Validate direct dataclass construction as well as imported drafts."""
+        if self.waypoints and self.waypoints[0].has_axis_curves:
+            raise ValueError("The first position has no incoming leg for axis curves")
+        if self.uses_flow and any(w.has_axis_curves for w in self.waypoints):
+            raise ValueError("Manual axis curves cannot be combined with Flow; choose one motion mode")
+        for i, (start, end) in enumerate(self.legs):
+            curves.validate_curve(end.pitch_curve)
+            curves.validate_curve(end.yaw_curve)
+            if end.axis_link not in ("independent", "pan_leads", "tilt_leads"):
+                raise ValueError("Invalid axis link")
+            leader = {"pan_leads": "yaw", "tilt_leads": "pitch"}.get(end.axis_link)
+            if leader and abs(arc_delta(self._arc(leader), getattr(start, leader), getattr(end, leader))) < 1e-8:
+                raise ValueError(f"P{i+1} to P{i+2}: linked leader {leader} must move; choose independent axes")
+
+    def axis_progress(self, leg_index: int, s: float):
+        """Normalized progress, speed and acceleration for both planned axes.
+
+        Linked follower input is leader progress, not elapsed time; a missing
+        follower curve is a 1:1 coupling, not a second application of easing.
+        """
+        end = self.waypoints[leg_index + 1]
+        base = curves.easing_kinematics(end.easing, s)
+        p = curves.evaluate(end.pitch_curve, s) if end.pitch_curve is not None else base
+        y = curves.evaluate(end.yaw_curve, s) if end.yaw_curve is not None else base
+        if end.axis_link == "pan_leads":
+            p = curves.compose(end.pitch_curve, y)
+        elif end.axis_link == "tilt_leads":
+            y = curves.compose(end.yaw_curve, p)
+        return p, y
+
+    def axis_rate_bounds(self, leg_index: int):
+        end = self.waypoints[leg_index + 1]
+        base = curves.EASING_SLOPES[end.easing]
+        p = curves.slope_bound(end.pitch_curve) if end.pitch_curve is not None else base
+        y = curves.slope_bound(end.yaw_curve) if end.yaw_curve is not None else base
+        if end.axis_link == "pan_leads":
+            p = y * curves.slope_bound(end.pitch_curve)
+        elif end.axis_link == "tilt_leads":
+            y = p * curves.slope_bound(end.yaw_curve)
+        return p, y
 
     def zoom_nodes(self) -> list[tuple[float, float, str]]:
         """(arrival time, zoom, easing) for the nodes that set a zoom.
@@ -698,6 +767,8 @@ class Move:
         out.name = f"{self.name} [{lo + 1}-{hi + 1}]"
         out.waypoints = out.waypoints[lo:hi + 1]
         out.waypoints[0].dwell = 0.0
+        out.waypoints[0].pitch_curve = out.waypoints[0].yaw_curve = None
+        out.waypoints[0].axis_link = "independent"
         # A segment of a longer move is a rehearsal, not the shot; looping the
         # whole shot and looping a fragment of it are different intentions and
         # inheriting the flag surprises people.
@@ -844,7 +915,7 @@ class Move:
             raise ValueError("waypoints must be a list")
         if d.get("setup") is not None and not isinstance(d["setup"], dict):
             raise ValueError("setup must be an object")
-        return Move(
+        result = Move(
             name=str(d.get("name", "untitled")),
             loop=_bool_field(d, "loop", False),
             ping_pong=_bool_field(d, "ping_pong", False),
@@ -855,6 +926,8 @@ class Move:
             setup=Move.validated_setup(d.get("setup") or {}),
             waypoints=[Waypoint.from_dict(w) for w in d.get("waypoints", [])],
         )
+        result.validate_axis_curves()
+        return result
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)

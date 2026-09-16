@@ -49,6 +49,7 @@
     function invalidate(){requestId++;undo=null;el('dUndo').hidden=true;
       clearAnalysis('Draft changed. Refresh analysis to rehearse the current shot.');
       window.copilot?.invalidate();
+      window.spatialStudio?.invalidate();
     }
     function pose(){
       const points=displayPoints;if(!points.length)return null;
@@ -100,7 +101,7 @@
         el('dCue').hidden=false;display();return;}
       t=next;display(false);if(t>=end()){pause();display();el('dState').textContent='Preview complete. Camera unchanged.';return;}frame=requestAnimationFrame(tick);
     }
-    function play(){if(!shown?.samples.length)return;if(playing){pause();return;}if(waiting!==null)return;
+    function play(){if(!shown?.samples.length)return;if(playing){pause();return;}if(waiting!==null)return;window.spatialStudio?.pause();
       if(t>=end())seek(0);playing=true;last=performance.now();el('dPlay').textContent='Ⅱ Pause preview';frame=requestAnimationFrame(tick);}
     function renderShown(){
       // Equivalent angle turns keep the chart continuous across +/-180.

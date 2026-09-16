@@ -318,7 +318,9 @@ class TestKeyframeAuthoringControls(unittest.TestCase):
         long way above the code that acts on it.
         """
         idx = self.page.html.index('querySelectorAll("[data-flow]")')
-        handler = self.page.html[idx:idx + 400]
+        # Inspect the complete handler: safety guards may grow without making
+        # a fixed character-window silently stop before the actual toggle.
+        handler = self.page.html[idx:].split("box.querySelectorAll", 1)[0]
         self.assertIn("w.flow = !w.flow", handler)
         self.assertIn("pushMove()", handler)
 

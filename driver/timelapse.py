@@ -375,6 +375,9 @@ def fingerprint(move: moves.Move) -> str:
         for w in move.waypoints
     ]
     body.append([bool(move.loop), bool(move.ping_pong), bool(move.route_arcs)])
+    # Keep legacy fingerprints stable; curve edits must invalidate a resume.
+    if any(w.has_axis_curves for w in move.waypoints):
+        body.append([[w.pitch_curve, w.yaw_curve, w.axis_link] for w in move.waypoints])
     raw = json.dumps(body, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 

@@ -17,6 +17,7 @@ import argparse
 import sys
 import re
 import copy
+import base64
 import hashlib
 from contextlib import nullcontext
 from functools import wraps
@@ -37,7 +38,7 @@ from http.cookies import CookieError, SimpleCookie
 from urllib.parse import parse_qs, urlsplit, quote
 
 from driver import (assistant, camera, census, commands, config, crew, director, hostsettings, journal, library, lut, moves,
-                    pathexport, preflight, repeatability, shutter,
+                    pathexport, preflight, repeatability, shutter, spatial, curve_preview,
                     timelapse, transport, wifi)
 from driver.datalink import Datalink
 from driver.gimbal import GimbalStick, MoveRunner, TILT_SIGN, YAW_SIGN
@@ -1973,6 +1974,39 @@ class CameraSession:
         ramp_cap = shaping.get_ramp(self.ramp).speed_cap
         return min(cap, ramp_cap) if ramp_cap is not None else cap
 
+    def spatial_preview(self, data: dict) -> dict:
+        """Offline scene arithmetic; never connects, replaces or runs a move."""
+        with self._workspace_lock:
+            shot = moves.Move.from_dict(data.get('move', self.move.to_dict()))
+            cap = self.director_speed_cap()
+        if 'recipe' in data:
+            shot = moves.Move.from_dict(spatial.recipe(shot, data['recipe']))
+        result = spatial.analyze(shot, data.get('options', {}), max_dps=cap)
+        return {'ok': True, 'spatial': result, 'move': shot.to_dict()}
+
+    def curves_preview(self, data: dict) -> dict:
+        """Draft-only axis inspection; never actuates or changes the workspace."""
+        with self._workspace_lock:
+            shot = moves.Move.from_dict(data.get('move', self.move.to_dict()))
+            cap = self.director_speed_cap()
+        return {'ok': True, 'curves': curve_preview.preview(shot, leg=data.get('leg', 1), max_dps=cap)}
+
+    def spatial_snapshot(self) -> dict:
+        """Read an already-running preview, with explicit unsynchronised pose."""
+        live, link = self.live, self.link
+        att = link.attitude if link else None
+        if (not live or not live.running or not att or
+                not 0 <= time.monotonic() - link.last_attitude_at <= 0.5 or
+                not 0 <= time.time() - live.last_frame_at <= 0.5 or
+                not all(math.isfinite(value) for value in (att.pitch, att.yaw))):
+            raise ValueError('A fresh, already-running preview and attitude are required. Nothing was connected or started.')
+        jpg = live.snapshot()
+        if not jpg or len(jpg) > 4 * 1024 * 1024:
+            raise ValueError('No bounded preview frame available')
+        return {'ok': True, 'image': 'data:image/jpeg;base64,' + base64.b64encode(jpg).decode('ascii'),
+                'pitch': att.pitch, 'yaw': att.yaw, 'captured_at': time.time(),
+                'scope': 'Preview still with nearby, unsynchronised attitude; not a camera photo or calibrated alignment.'}
+
     def assistant_prepare(self, client: str, data: dict) -> dict:
         with self._workspace_lock:
             generation = self.workspace_info()["generation"]
@@ -2550,9 +2584,9 @@ class Handler(BaseHTTPRequestHandler):
             # Assists and scopes, shared by both pages so the exposure maths
             # cannot drift into two disagreeing copies.
             self._file(WEB_DIR / "monitor.js", "application/javascript; charset=utf-8")
-        elif self.route in ("/session.js", "/director.js", "/copilot.js", "/workspace-layout.js", "/studio-settings.js", "/ui.js", "/lens-controls.js", "/vendor/snapgrid.js"):
+        elif self.route in ("/session.js", "/director.js", "/copilot.js", "/workspace-layout.js", "/studio-settings.js", "/ui.js", "/lens-controls.js", "/vendor/snapgrid.js", "/spatial.js", "/spatial-core.js", "/vendor/spatial-view.js", "/axis-curves.js"):
             self._file(WEB_DIR / self.route[1:], "application/javascript; charset=utf-8")
-        elif self.route in ("/director.css", "/copilot.css", "/workspace-layout.css", "/studio-settings.css", "/ui.css", "/lens-controls.css"):
+        elif self.route in ("/director.css", "/copilot.css", "/workspace-layout.css", "/studio-settings.css", "/ui.css", "/lens-controls.css", "/spatial.css", "/axis-curves.css"):
             self._file(WEB_DIR / self.route.lstrip("/"), "text/css; charset=utf-8")
         elif self.route == '/api/access':
             self._json({'ok': True, 'identity': self._principal, 'lan_available': bool(self.token)})
@@ -2588,6 +2622,11 @@ class Handler(BaseHTTPRequestHandler):
             # The whole log. Status carries only the tail, and a compare or an
             # export built from a tail silently addresses the wrong takes.
             self._json({"ok": True, "takes": self.session.takes})
+        elif self.route == '/api/spatial/snapshot':
+            try:
+                self._json(self.session.spatial_snapshot())
+            except ValueError as exc:
+                self._json({'ok': False, 'error': str(exc)}, 400)
         elif self.route == "/api/move/path":
             self._json(self.session.move_path())
         elif self.route == "/api/timelapse/resume":
@@ -2846,6 +2885,25 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, **({"move": self.session.move.to_dict()} if ai is not None else {})})
             elif self.route == "/api/director/preview":
                 self._json(self.session.director_preview(self._body()))
+            elif self.route == '/api/spatial/preview':
+                self._json(self.session.spatial_preview(self._body()))
+            elif self.route == '/api/move/curves/preview':
+                self._json(self.session.curves_preview(self._body()))
+            elif self.route == '/api/spatial/settle':
+                body = self._body()
+                index = body.get('take')
+                if type(index) is not int or not 0 <= index < len(self.session.takes):
+                    raise ValueError('Select an existing take')
+                take = self.session.takes[index]
+                motion = take.get('motion') or {}
+                shot_data = take.get('path') or motion.get('path')
+                if not isinstance(shot_data, dict):
+                    raise ValueError('This take has no immutable shot snapshot for settling analysis')
+                shot = moves.Move.from_dict(shot_data)
+                if shot.loop or shot.ping_pong:
+                    raise ValueError('Settling requires a single forward take; repeated and reverse cycles need recorded beat timestamps')
+                self._json({'ok': True, 'observations': spatial.settle(motion.get('trace', []), shot.arrival_times()),
+                            'scope': 'Nominal program time excluding cue waits; reported angular quiet is not proof of image stability'})
             elif self.route == "/api/moves/save":
                 self._json({"ok": True,
                             "entry": self.session.save_move(

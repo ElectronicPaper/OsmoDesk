@@ -1,6 +1,10 @@
 OsmoDesk's offline layout bundle includes @snapgridjs/core 0.10.0 and
 react-grid-layout core 2.2.x, pinned by package-lock.json.
 
+The offline spatial rehearsal bundle also includes Three.js 0.186.0
+(https://threejs.org), pinned by package-lock.json, under the same MIT terms below.
+Copyright (c) 2010-2026 three.js authors
+
 MIT License
 Copyright (c) 2026 Edmond Leung (@snapgridjs/core)
 Copyright (c) 2016 Samuel Reed (react-grid-layout)
